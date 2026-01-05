@@ -1,0 +1,71 @@
+{
+  "voxy.config.title": "Voxy",
+
+  "voxy.config.general": "General",
+  "voxy.config.rendering": "Rendering",
+
+  "voxy.config.general.enabled": "Enable Voxy",
+  "voxy.config.general.enabled.tooltip": "Fully enables or disables voxy",
+
+  "voxy.config.general.serviceThreads": "Service threads",
+  "voxy.config.general.serviceThreads.tooltip": "Number of threads the ServiceThreadPool can use",
+
+  "voxy.config.general.useSodiumBuilder": "Use sodium threads",
+  "voxy.config.general.useSodiumBuilder.tooltip": "Uses sodium builder threads as part of voxys thread pool, can reduce stuttering and lag when moving quickly at high render distance",
+
+  "voxy.config.general.ingest": "Chunk Ingest",
+  "voxy.config.general.ingest.tooltip": "Enables or disables voxies ability to convert new chunks into LoDs",
+
+  "voxy.config.general.rendering": "Voxy Rendering",
+  "voxy.config.general.rendering.tooltip": "Enables or disables voxy rendering",
+
+  "voxy.config.general.subDivisionSize": "Pixels^2 of subdivision size",
+  "voxy.config.general.subDivisionSize.tooltip": "Maximum size in pixels (squared) of screenspace AABB before subdiving to smaller LoDs (Smaller being higher quality)",
+
+  "voxy.config.general.renderDistance": "Render distance",
+  "voxy.config.general.renderDistance.tooltip": "Render distance of voxy in chunks",
+
+  "voxy.config.general.environmental_fog": "Enable environmental fog",
+  "voxy.config.general.environmental_fog.tooltip": "Enables or disables voxy rendering environmental fog",
+
+  "voxy.config.general.render_fog": "Enable render fog",
+  "voxy.config.general.render_fog.tooltip": "Enables or disables render fog effect",
+
+  "voxy.config.general.render_statistics": "Enable render statistics",
+  "voxy.config.general.render_statistics.tooltip": "Enable render statistics in F3 menu, useful for debugging",
+
+  "voxy.sodium.page.title": "Voxy",
+
+  "voxy.sodium.option.enabled": "Enable Voxy",
+  "voxy.sodium.option.enabled.tooltip": "Master switch to enable or disable the Voxy LOD system",
+
+  "voxy.sodium.option.enable_rendering": "LOD Rendering",
+  "voxy.sodium.option.enable_rendering.tooltip": "Enable rendering of LOD terrain. Disable to keep data ingestion running without visual output.",
+
+  "voxy.sodium.option.ingest_enabled": "Chunk Ingestion",
+  "voxy.sodium.option.ingest_enabled.tooltip": "Enable automatic conversion of visited chunks into LOD data",
+
+  "voxy.sodium.option.render_distance": "LOD Render Distance",
+  "voxy.sodium.option.render_distance.tooltip": "How far LOD terrain renders. Value is multiplied by 32 to get chunk distance. Example: 16 = 512 chunks.",
+
+  "voxy.sodium.option.service_threads": "Service Threads",
+  "voxy.sodium.option.service_threads.tooltip": "Number of background threads for LOD processing. More threads = faster LOD generation but higher CPU usage.",
+
+  "voxy.sodium.option.subdivision_size": "Subdivision Size",
+  "voxy.sodium.option.subdivision_size.tooltip": "Maximum screen-space size before subdividing to higher detail LODs. Lower = more detail but more GPU work.",
+
+  "voxy.sodium.option.environmental_fog": "Environmental Fog",
+  "voxy.sodium.option.environmental_fog.tooltip": "Apply environmental fog effects to LOD terrain",
+
+  "voxy.sodium.option.dont_use_sodium_threads": "Separate Thread Pool",
+  "voxy.sodium.option.dont_use_sodium_threads.tooltip": "Don't share threads with Sodium's chunk builder. Enable if you experience stuttering.",
+
+  "voxy.sodium.option.lod_boundary_buffer": "LOD Boundary Overlap",
+  "voxy.sodium.option.lod_boundary_buffer.tooltip": "Controls overlap between vanilla chunks and LODs. Higher = smoother transitions when flying fast, but slight overdraw.",
+
+  "voxy.sodium.option.render_statistics": "Debug Statistics",
+  "voxy.sodium.option.render_statistics.tooltip": "Show LOD render statistics in the F3 debug screen",
+
+  "voxy.sodium.option.earth_curve_ratio": "World Curvature",
+  "voxy.sodium.option.earth_curve_ratio.tooltip": "Simulates standing on a spherical planet. 0 = flat world. Higher values = smaller planet effect (more curvature). Inspired by Distant Horizons."
+}
