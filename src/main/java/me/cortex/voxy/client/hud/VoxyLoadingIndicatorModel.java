@@ -14,8 +14,9 @@ final class VoxyLoadingIndicatorModel {
     final int meshQueue;
     final int modelQueue;
     final boolean nodePending;
+    final int loadedSections;
 
-    VoxyLoadingIndicatorModel(Mode mode, float alpha, float progress, float pulse, int meshQueue, int modelQueue, boolean nodePending) {
+    VoxyLoadingIndicatorModel(Mode mode, float alpha, float progress, float pulse, int meshQueue, int modelQueue, boolean nodePending, int loadedSections) {
         this.mode = mode;
         this.alpha = alpha;
         this.progress = progress;
@@ -23,6 +24,7 @@ final class VoxyLoadingIndicatorModel {
         this.meshQueue = meshQueue;
         this.modelQueue = modelQueue;
         this.nodePending = nodePending;
+        this.loadedSections = loadedSections;
     }
 
     boolean visible() {

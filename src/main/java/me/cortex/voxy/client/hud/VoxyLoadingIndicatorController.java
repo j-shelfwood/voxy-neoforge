@@ -26,7 +26,7 @@ final class VoxyLoadingIndicatorController {
         if (snapshot == null || snapshot.shuttingDown()) {
             this.mode = VoxyLoadingIndicatorModel.Mode.HIDDEN;
             this.alpha += (0f - this.alpha) * 0.25f;
-            return new VoxyLoadingIndicatorModel(this.mode, this.alpha, this.displayedProgress, this.pulse, 0, 0, false);
+            return new VoxyLoadingIndicatorModel(this.mode, this.alpha, this.displayedProgress, this.pulse, 0, 0, false, 0);
         }
 
         int pending = snapshot.pendingUnits();
@@ -72,7 +72,8 @@ final class VoxyLoadingIndicatorController {
                 this.pulse,
                 snapshot.meshQueue(),
                 snapshot.modelQueue(),
-                snapshot.nodeWorkPending());
+                snapshot.nodeWorkPending(),
+                snapshot.loadedSections());
     }
 
     private void reset(int rendererIdentity) {
