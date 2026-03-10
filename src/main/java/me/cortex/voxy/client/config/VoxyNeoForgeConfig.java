@@ -33,6 +33,7 @@ public class VoxyNeoForgeConfig {
     private static final boolean DEFAULT_DONT_USE_EMBEDDIUM_BUILDER_THREADS = false;
     private static final int DEFAULT_EARTH_CURVE_RATIO = 0;
     private static final boolean DEFAULT_RENDER_STATISTICS = false;
+    private static final boolean DEFAULT_LOADING_INDICATOR = true;
 
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
@@ -104,6 +105,10 @@ public class VoxyNeoForgeConfig {
             .comment("Show render statistics in F3 debug screen",
                      "Displays LOD traversal counts, visible sections, and quad counts")
             .define("renderStatistics", DEFAULT_RENDER_STATISTICS);
+
+    static final ModConfigSpec.BooleanValue LOADING_INDICATOR = BUILDER
+            .comment("Show Voxy loading/progress indicator overlay")
+            .define("loadingIndicator", DEFAULT_LOADING_INDICATOR);
 
     public static final ModConfigSpec SPEC = BUILDER.build();
 
@@ -278,6 +283,15 @@ public class VoxyNeoForgeConfig {
         }
     }
 
+    public static boolean isLoadingIndicatorEnabled() {
+        if (!configLoaded) return DEFAULT_LOADING_INDICATOR;
+        try {
+            return LOADING_INDICATOR.get();
+        } catch (IllegalStateException ignored) {
+            return DEFAULT_LOADING_INDICATOR;
+        }
+    }
+
     // ========== Setters (for Embeddium UI integration) ==========
 
     public static void setEnabled(boolean value) {
@@ -331,5 +345,9 @@ public class VoxyNeoForgeConfig {
     public static void setRenderStatistics(boolean value) {
         RENDER_STATISTICS.set(value);
         RenderStatistics.enabled = value;
+    }
+
+    public static void setLoadingIndicatorEnabled(boolean value) {
+        LOADING_INDICATOR.set(value);
     }
 }

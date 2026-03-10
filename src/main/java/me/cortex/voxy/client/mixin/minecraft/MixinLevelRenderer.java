@@ -5,6 +5,7 @@ import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.compat.IrisCompatManager;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
+import me.cortex.voxy.client.iris.VoxyUniforms;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyCommon;
@@ -31,16 +32,30 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
 
     @Inject(method = "allChanged()V", at = @At("RETURN"), order = 900)//We want to inject before embeddium
     private void reloadVoxyRenderer(CallbackInfo ci) {
-        if (this.level != null) {
-            // allChanged() can fire multiple times during shader/dimension transitions.
-            // Route through the debounced scheduler to avoid teardown/recreate storms.
-            VoxyRenderSystem.scheduleRendererRecreate("LevelRenderer#allChanged");
+        if (this.level == null) {
+            return;
+        }
+
+        // Keep upstream behavior when recreate scheduling is disabled:
+        // allChanged() must immediately (re)create the renderer or LODs never appear.
+        if (!VoxyRenderSystem.isIrisRendererRecreateEnabled()) {
+            this.shutdownRenderer();
+            this.createRenderer();
+            return;
+        }
+
+        // allChanged() can fire multiple times during shader/dimension transitions.
+        // Route through the debounced scheduler to avoid teardown/recreate storms.
+        VoxyRenderSystem.scheduleRendererRecreate("LevelRenderer#allChanged");
+        if (this.renderer == null) {
+            this.createRenderer();
         }
     }
 
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void voxy$captureSetWorld(ClientLevel world, CallbackInfo ci) {
         if (this.level != world) {
+            VoxyUniforms.resetTemporalState("level_switch");
             this.shutdownRenderer();
         }
     }

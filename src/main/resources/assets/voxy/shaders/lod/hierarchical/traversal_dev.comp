@@ -125,12 +125,7 @@ void traverse(in UnpackedNode node) {
     setupScreenspace(node);
     //debugDumpNode(node);
 
-    #ifdef DISABLE_TRAVERSAL_VISIBILITY_CULLING
-    if (false) {
-    #else
-    bool hizCulled = node.lodLevel < HIZ_DISABLE_FROM_LOD && isCulledByHiz();
-    if (outsideFrustum() || hizCulled) {
-    #endif
+    if (outsideFrustum() || isCulledByHiz()) {
         //printf("culled");
     } else {
         //It is visible, TODO: maybe do a more detailed hiz test? (or make it so that )

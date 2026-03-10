@@ -201,6 +201,9 @@ public class ModelFactory {
 
         //We need to get it twice cause of threading
         if (this.idMappings[blockId] != -1) {
+            this.blockStatesInFlightLock.lock();
+            this.blockStatesInFlight.remove(blockId);
+            this.blockStatesInFlightLock.unlock();
             return false;
         }
 
@@ -226,15 +229,25 @@ public class ModelFactory {
 
         RawBakeResult result = new RawBakeResult(blockId, blockState);
         int allocation = this.downstream.download(MODEL_TEXTURE_SIZE*MODEL_TEXTURE_SIZE*2*4*6, ptr -> this.rawBakeResults.add(result.cpyBuf(ptr)));
-        int flags = this.bakery.renderToStream(blockState, this.downstream.getBufferId(), allocation);
-        result.hasDarkenedTextures = (flags&2)!=0;
-        result.isShaded = (flags&1)!=0;
-        return true;
+        try {
+            int flags = this.bakery.renderToStream(blockState, this.downstream.getBufferId(), allocation);
+            result.hasDarkenedTextures = (flags & 2) != 0;
+            result.isShaded = (flags & 1) != 0;
+            return true;
+        } catch (Throwable t) {
+            this.markBlockAsAirFallback(blockId, blockState, "renderToStream", t);
+            return false;
+        }
     }
 
     private boolean processModelResult() {
         var result = this.rawBakeResults.poll();
         if (result == null) return false;
+        if (this.idMappings[result.blockId] != -1) {
+            // Stale callback (e.g. bake was already air-fallbacked). Drop it.
+            result.rawData.free();
+            return !this.rawBakeResults.isEmpty();
+        }
 
         // If this block has a fluid state dependency, check that the fluid is already baked
         // before we free the rawData and process it. If not ready yet, push to back of deque
@@ -269,11 +282,32 @@ public class ModelFactory {
             }
         }
         result.rawData.free();
-        var bakeResult = this.processTextureBakeResult(result.blockId, result.blockState, textureData, result.isShaded, result.hasDarkenedTextures);
-        if (bakeResult!=null) {
-            this.uploadResults.add(bakeResult);
+        try {
+            var bakeResult = this.processTextureBakeResult(result.blockId, result.blockState, textureData, result.isShaded, result.hasDarkenedTextures);
+            if (bakeResult != null) {
+                this.uploadResults.add(bakeResult);
+            }
+        } catch (Throwable t) {
+            this.markBlockAsAirFallback(result.blockId, result.blockState, "processTextureBakeResult", t);
         }
         return !this.rawBakeResults.isEmpty();
+    }
+
+    private void markBlockAsAirFallback(int blockId, BlockState blockState, String stage, Throwable cause) {
+        if (this.idMappings[blockId] == 0) {
+            this.removeFromInFlightIfPresent(blockId);
+            return;
+        }
+        this.idMappings[blockId] = 0;
+        this.removeFromInFlightIfPresent(blockId);
+        Logger.warn("[VoxyBakeFallback] Block state " + blockState + " (id=" + blockId + ") failed at " + stage
+                + ", substituting AIR model for LOD continuity. Cause: " + cause);
+    }
+
+    private void removeFromInFlightIfPresent(int blockId) {
+        this.blockStatesInFlightLock.lock();
+        this.blockStatesInFlight.remove(blockId);
+        this.blockStatesInFlightLock.unlock();
     }
 
     private final ConcurrentLinkedDeque<Mapper.BiomeEntry> biomeQueue = new ConcurrentLinkedDeque<>();

@@ -20,6 +20,7 @@ public class VoxyUniforms {
             Integer.getInteger("voxy.vxRenderDistanceMaxChunks", 512);
     private static int lastLoggedRawDistance = Integer.MIN_VALUE;
     private static int lastLoggedClampedDistance = Integer.MIN_VALUE;
+    private static volatile int temporalResetEpoch = 0;
 
     private static IGetVoxyRenderSystem getRendererAccessor() {
         var levelRenderer = Minecraft.getInstance().levelRenderer;
@@ -95,6 +96,11 @@ public class VoxyUniforms {
                 .uniformMatrix(PER_FRAME, "vxProjPrev", new PreviousMat(VoxyUniforms::getProjection));
     }
 
+    public static void resetTemporalState(String reason) {
+        temporalResetEpoch++;
+        Logger.info("[VoxyUniforms] Temporal state reset; reason='" + reason + "' epoch=" + temporalResetEpoch);
+    }
+
 
 
 
@@ -118,13 +124,21 @@ public class VoxyUniforms {
         private final Supplier<Matrix4fc> parent;
         private Matrix4f previous;
         private int lastFrameId = Integer.MIN_VALUE;
+        private int lastResetEpoch;
 
         PreviousMat(Supplier<Matrix4fc> parent) {
             this.parent = parent;
             this.previous = new Matrix4f();
+            this.lastResetEpoch = temporalResetEpoch;
         }
 
         public Matrix4fc get() {
+            int currentResetEpoch = temporalResetEpoch;
+            if (currentResetEpoch != this.lastResetEpoch) {
+                this.previous = new Matrix4f(this.parent.get());
+                this.lastFrameId = getViewportFrameId();
+                this.lastResetEpoch = currentResetEpoch;
+            }
             Matrix4f previous = this.previous;
             int frameId = getViewportFrameId();
             if (frameId != this.lastFrameId) {

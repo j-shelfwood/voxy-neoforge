@@ -1,18 +1,19 @@
 package me.cortex.voxy.client.hud;
 
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.util.Mth;
 
 final class VoxyLoadingIndicatorRenderer {
-    private static final int WIDTH = 136;
-    private static final int HEIGHT = 18;
+    private static final int WIDTH = 170;
+    private static final int HEIGHT = 84;
     private static final int MARGIN = 10;
-    private static final int BLOCK_COUNT = 20;
 
-    private static final int MODEL_COLOR = 0x62BEFF;
-    private static final int MESH_COLOR = 0xE2B66B;
-    private static final int NODE_COLOR = 0x7FD8C5;
-    private static final int MAP_COLOR = 0xB1D4FF;
+    private static final int MODEL_COLOR = 0x69BCFF;
+    private static final int MESH_COLOR = 0xF2B467;
+    private static final int NODE_COLOR = 0x7FE0CA;
+    private static final int SWEEP_COLOR = 0xC7F1FF;
+    private static final int RESIDENCY_COLOR = 0xAFCBFF;
 
     public void render(GuiGraphics gui, VoxyLoadingIndicatorModel model) {
         if (!model.visible()) {
@@ -24,79 +25,120 @@ final class VoxyLoadingIndicatorRenderer {
         int x1 = x2 - WIDTH;
         int y1 = y2 - HEIGHT;
 
-        int bg = color(0x0E1115, 0.62f * model.alpha);
+        int bg = color(0x0C1014, 0.68f * model.alpha);
         gui.fill(x1, y1, x2, y2, bg);
-        gui.fill(x1 + 1, y1 + 1, x2 - 1, y2 - 1, color(0x131A22, 0.56f * model.alpha));
+        gui.fill(x1 + 1, y1 + 1, x2 - 1, y2 - 1, color(0x121A22, 0.58f * model.alpha));
+        gui.fill(x1 + 3, y1 + 3, x2 - 3, y2 - 3, color(0x0B1218, 0.46f * model.alpha));
 
-        int laneX = x1 + 8;
-        int laneY = y1 + 7;
-        int laneW = 84;
-        renderLane(gui, laneX, laneY, laneW, MODEL_COLOR, queueLevel(model.modelQueue, 950f), model);
-        renderLane(gui, laneX, laneY + 4, laneW, MESH_COLOR, queueLevel(model.meshQueue, 2200f), model);
-        float nodeLevel = model.nodePending ? 1f : 0.08f + 0.06f * (1.0f - Math.abs(0.5f - model.pulse) * 2.0f);
-        renderLane(gui, laneX, laneY + 8, laneW, NODE_COLOR, nodeLevel, model);
+        int cx = x1 + 34;
+        int cy = y1 + 45;
+        float meshLevel = queueLevel(model.meshQueue, 2200f);
+        float modelLevel = queueLevel(model.modelQueue, 950f);
+        float nodeLevel = model.nodePending ? 1f : (0.12f + 0.07f * (1.0f - Math.abs(0.5f - model.pulse) * 2.0f));
+        float residencyLevel = queueLevel(model.loadedSections, 45000f);
+        float sweep = model.pulse * 6.2831855f;
 
-        renderMapCells(gui, x2 - 40, y1 + 3, model);
-        renderLegendPins(gui, x1 + 3, laneY, model);
+        // Backdrop rings to anchor the scanner.
+        drawRing(gui, cx, cy, 20, 1, color(0x1C2A35, 0.60f * model.alpha));
+        drawRing(gui, cx, cy, 15, 1, color(0x1C2A35, 0.52f * model.alpha));
+        drawRing(gui, cx, cy, 10, 1, color(0x1C2A35, 0.45f * model.alpha));
 
-        if (model.nodePending) {
-            gui.fill(x1 - 3, y1 + 2, x1 - 1, y2 - 2, color(NODE_COLOR, model.alpha));
+        // Three distinct compute queues as concentric activity arcs.
+        drawWorkArc(gui, cx, cy, 20, 2, sweep + 0.60f, meshLevel, MESH_COLOR, model.alpha);
+        drawWorkArc(gui, cx, cy, 15, 2, sweep + 2.35f, modelLevel, MODEL_COLOR, model.alpha);
+        drawWorkArc(gui, cx, cy, 10, 2, sweep + 4.25f, nodeLevel, NODE_COLOR, model.alpha);
+
+        // Sweeping beam communicates active traversal/scanning.
+        drawSweep(gui, cx, cy, 21, sweep, model.alpha);
+
+        renderModeText(gui, x1 + 8, y1 + 7, model);
+        renderMetricLegend(gui, x1 + 68, y1 + 21, model, meshLevel, modelLevel, nodeLevel, residencyLevel);
+        renderScannerLegend(gui, x1 + 8, y1 + 73, model);
+    }
+
+    private static void drawWorkArc(GuiGraphics gui, int cx, int cy, int radius, int thickness, float phase, float level, int rgb, float alpha) {
+        float clamped = Mth.clamp(level, 0f, 1f);
+        float span = 0.55f + clamped * 5.4f;
+        int samples = 120;
+        for (int i = 0; i < samples; i++) {
+            float t = i / (float) (samples - 1);
+            float angle = phase + t * span;
+            float amp = 0.25f + 0.75f * t;
+            int px = Math.round(cx + (float) Math.cos(angle) * radius);
+            int py = Math.round(cy + (float) Math.sin(angle) * radius);
+            int c = color(rgb, alpha * (0.18f + amp * 0.78f));
+            gui.fill(px, py, px + thickness, py + thickness, c);
         }
     }
 
-    private static void renderLane(GuiGraphics gui, int x, int y, int width, int rgb, float level, VoxyLoadingIndicatorModel model) {
-        gui.fill(x, y, x + width, y + 3, color(rgb, 0.16f * model.alpha));
-
-        float clampedLevel = Mth.clamp(level, 0f, 1f);
-        float highlightedBlocks = clampedLevel * BLOCK_COUNT;
-        int blockWidth = Math.max(1, (width - (BLOCK_COUNT - 1)) / BLOCK_COUNT);
-        int streamHead = (int) (model.pulse * BLOCK_COUNT);
-
-        for (int i = 0; i < BLOCK_COUNT; i++) {
-            int bx = x + i * (blockWidth + 1);
-            boolean active = i < highlightedBlocks;
-            float intensity = active ? 0.82f : 0.12f;
-            if (model.mode == VoxyLoadingIndicatorModel.Mode.STREAMING && Math.abs(i - streamHead) <= 1) {
-                intensity = Math.max(intensity, 0.95f);
-            }
-            if (model.mode == VoxyLoadingIndicatorModel.Mode.INITIAL_LOAD && i < model.progress * BLOCK_COUNT) {
-                intensity = Math.max(intensity, 0.9f);
-            }
-            gui.fill(bx, y + 1, bx + blockWidth, y + 2, color(rgb, intensity * model.alpha));
+    private static void drawSweep(GuiGraphics gui, int cx, int cy, int radius, float angle, float alpha) {
+        int beamSteps = 18;
+        for (int i = 0; i < beamSteps; i++) {
+            float d = i / (float) (beamSteps - 1);
+            float r = radius * d;
+            int px = Math.round(cx + (float) Math.cos(angle) * r);
+            int py = Math.round(cy + (float) Math.sin(angle) * r);
+            float trail = (1.0f - d);
+            gui.fill(px, py, px + 1, py + 1, color(SWEEP_COLOR, alpha * trail * 0.78f));
         }
     }
 
-    private static void renderMapCells(GuiGraphics gui, int x, int y, VoxyLoadingIndicatorModel model) {
-        int cols = 9;
-        int rows = 2;
-        float sectionSignal = queueLevel(model.loadedSections, 1600f);
-        float mapLevel = model.mode == VoxyLoadingIndicatorModel.Mode.INITIAL_LOAD
-                ? (model.progress * 0.7f + sectionSignal * 0.3f)
-                : sectionSignal;
-        int activeCells = Math.round(Mth.clamp(mapLevel, 0f, 1f) * cols * rows);
-        int pulseCell = (int) (model.pulse * cols) % cols;
+    private static void renderMetricLegend(GuiGraphics gui, int x, int y, VoxyLoadingIndicatorModel model, float mesh, float baked, float node, float residency) {
+        drawMetricLane(gui, x, y, "MESH BUILD", MESH_COLOR, mesh, model.meshQueue, model.alpha);
+        drawMetricLane(gui, x, y + 12, "MODEL BAKE", MODEL_COLOR, baked, model.modelQueue, model.alpha);
+        drawMetricLane(gui, x, y + 24, "NODE FETCH", NODE_COLOR, node, model.nodePending ? 1 : 0, model.alpha);
+        drawMetricLane(gui, x, y + 36, "RESIDENCY", RESIDENCY_COLOR, residency, model.loadedSections, model.alpha);
+    }
 
-        int cell = 3;
-        int gap = 1;
-        for (int row = 0; row < rows; row++) {
-            for (int col = 0; col < cols; col++) {
-                int idx = row * cols + col;
-                int cx = x + col * (cell + gap);
-                int cy = y + row * (cell + gap);
-                boolean active = idx < activeCells;
-                float alpha = active ? 0.85f : 0.12f;
-                if (col == pulseCell && model.mode == VoxyLoadingIndicatorModel.Mode.STREAMING) {
-                    alpha = Math.max(alpha, 0.95f);
-                }
-                gui.fill(cx, cy, cx + cell, cy + cell, color(MAP_COLOR, alpha * model.alpha));
-            }
+    private static void drawMetricLane(GuiGraphics gui, int x, int y, String label, int rgb, float level, int value, float alpha) {
+        int textColor = color(0xA9BFCE, alpha * 0.9f);
+        drawScaledText(gui, label, x, y, textColor, 0.78f);
+
+        int barX = x + 54;
+        int barY = y + 2;
+        int barW = 28;
+        int barH = 5;
+        gui.fill(barX, barY, barX + barW, barY + barH, color(0x1A2733, alpha * 0.66f));
+        int lit = Math.round(Mth.clamp(level, 0f, 1f) * barW);
+        if (lit > 0) {
+            gui.fill(barX, barY, barX + lit, barY + barH, color(rgb, alpha * 0.92f));
+        }
+        drawScaledText(gui, Integer.toString(value), x + 86, y, color(0xD9E7F7, alpha * 0.9f), 0.74f);
+    }
+
+    private static void drawRing(GuiGraphics gui, int cx, int cy, int radius, int thickness, int color) {
+        int samples = 192;
+        for (int i = 0; i < samples; i++) {
+            float angle = i * (6.2831855f / samples);
+            int px = Math.round(cx + (float) Math.cos(angle) * radius);
+            int py = Math.round(cy + (float) Math.sin(angle) * radius);
+            gui.fill(px, py, px + thickness, py + thickness, color);
         }
     }
 
-    private static void renderLegendPins(GuiGraphics gui, int x, int y, VoxyLoadingIndicatorModel model) {
-        gui.fill(x, y + 1, x + 2, y + 2, color(MODEL_COLOR, model.alpha));
-        gui.fill(x, y + 5, x + 2, y + 6, color(MESH_COLOR, model.alpha));
-        gui.fill(x, y + 9, x + 2, y + 10, color(NODE_COLOR, model.alpha));
+    private static void renderModeText(GuiGraphics gui, int x, int y, VoxyLoadingIndicatorModel model) {
+        String state = model.mode == VoxyLoadingIndicatorModel.Mode.INITIAL_LOAD ? "VOXY BOOTSTRAP" :
+                (model.mode == VoxyLoadingIndicatorModel.Mode.STREAMING ? "VOXY STREAMING" : "VOXY READY");
+        int textColor = color(0xD2E5F9, model.alpha * 0.88f);
+        drawScaledText(gui, state, x, y, textColor, 0.84f);
+
+        if (model.mode == VoxyLoadingIndicatorModel.Mode.INITIAL_LOAD) {
+            int p = Math.round(model.progress * 100f);
+            drawScaledText(gui, p + "%", x + 1, y + 9, color(0x8FC7FF, model.alpha * 0.86f), 0.78f);
+        }
+    }
+
+    private static void renderScannerLegend(GuiGraphics gui, int x, int y, VoxyLoadingIndicatorModel model) {
+        drawScaledText(gui, "OUTER=MESH  MID=MODEL  INNER=NODE", x, y, color(0x91A8BA, model.alpha * 0.80f), 0.68f);
+    }
+
+    private static void drawScaledText(GuiGraphics gui, String text, int x, int y, int color, float scale) {
+        gui.pose().pushPose();
+        gui.pose().scale(scale, scale, 1f);
+        int sx = Math.round(x / scale);
+        int sy = Math.round(y / scale);
+        gui.drawString(Minecraft.getInstance().font, text, sx, sy, color, false);
+        gui.pose().popPose();
     }
 
     private static float queueLevel(int queueSize, float halfSaturation) {

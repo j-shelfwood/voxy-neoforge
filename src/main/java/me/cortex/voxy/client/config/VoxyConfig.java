@@ -68,6 +68,10 @@ public class VoxyConfig {
         return VoxyNeoForgeConfig.getEarthCurveRatio();
     }
 
+    public boolean isLoadingIndicatorEnabled() {
+        return VoxyNeoForgeConfig.isLoadingIndicatorEnabled();
+    }
+
     // ========== Delegated Setters ==========
 
     public void setEnabled(boolean value) {
@@ -116,6 +120,10 @@ public class VoxyConfig {
 
     public void setEarthCurveRatio(int value) {
         VoxyNeoForgeConfig.setEarthCurveRatio(value);
+    }
+
+    public void setLoadingIndicatorEnabled(boolean value) {
+        VoxyNeoForgeConfig.setLoadingIndicatorEnabled(value);
     }
 
     // ========== Save ==========

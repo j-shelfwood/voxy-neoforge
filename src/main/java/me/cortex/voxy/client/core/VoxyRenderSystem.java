@@ -10,6 +10,7 @@ import me.cortex.voxy.client.VoxyClient;
 import me.cortex.voxy.client.compat.IrisCompatManager;
 import me.cortex.voxy.client.config.RenderDistancePolicy;
 import me.cortex.voxy.client.config.VoxyConfig;
+import me.cortex.voxy.client.iris.VoxyUniforms;
 import me.cortex.voxy.client.core.gl.Capabilities;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlTexture;
@@ -89,9 +90,12 @@ public class VoxyRenderSystem {
 
     private static final boolean RENDER_LODS_IN_IRIS_SHADOW_PASS =
             System.getProperty("voxy.renderLodsInIrisShadowPass", "false").equalsIgnoreCase("true");
+    private static final boolean ENABLE_IRIS_RENDERER_RECREATE =
+            System.getProperty("voxy.enableIrisRendererRecreate", "false").equalsIgnoreCase("true");
     private static final long IRIS_RECREATE_MIN_INTERVAL_NANOS =
             Long.getLong("voxy.irisRecreateMinIntervalMs", 1500L) * 1_000_000L;
     private static final AtomicBoolean IRIS_RECREATE_QUEUED = new AtomicBoolean(false);
+    private static volatile String pendingIrisRecreateReason = "unspecified";
     private static volatile long lastIrisRecreateNanos = 0L;
 
     private final WorldEngine worldIn;
@@ -125,7 +129,21 @@ public class VoxyRenderSystem {
         return this.shuttingDown;
     }
 
+    public VoxyLoadingSnapshot getLoadingSnapshot() {
+        int loadedSections = -1;
+        if (this.pipeline instanceof AbstractRenderPipeline arp) {
+            loadedSections = arp.getSectionCount();
+        }
+        int meshQueue = this.renderGen.getTaskCount();
+        int modelQueue = this.modelService.getProcessingCount();
+        boolean nodeWorkPending = meshQueue > 0 || modelQueue > 0;
+        return new VoxyLoadingSnapshot(meshQueue, modelQueue, nodeWorkPending, Math.max(0, loadedSections), this.shuttingDown);
+    }
+
     public static void scheduleRendererRecreate(String reason) {
+        if (!ENABLE_IRIS_RENDERER_RECREATE) {
+            return;
+        }
         var mc = Minecraft.getInstance();
         if (mc == null || mc.levelRenderer == null) {
             return;
@@ -140,30 +158,54 @@ public class VoxyRenderSystem {
             return;
         }
         lastIrisRecreateNanos = now;
+        pendingIrisRecreateReason = reason;
 
         Logger.info("[VoxyRecreate] Queued renderer recreate; reason='" + reason + "'");
-        mc.execute(() -> {
-            try {
-                var getter = (IGetVoxyRenderSystem) mc.levelRenderer;
-                if (getter == null) {
-                    return;
-                }
+    }
 
-                var before = getter.getVoxyRenderSystem();
-                String beforePipeline = before == null ? "none" : before.getPipelineSimpleName();
-                getter.shutdownRenderer();
-                if (mc.level != null) {
-                    getter.createRenderer();
-                }
-                var after = getter.getVoxyRenderSystem();
-                String afterPipeline = after == null ? "none" : after.getPipelineSimpleName();
-                Logger.info("[VoxyRecreate] Renderer recreate complete; before=" + beforePipeline + " after=" + afterPipeline);
-            } catch (Throwable t) {
-                Logger.error("[VoxyRecreate] Renderer recreate failed", t);
-            } finally {
-                IRIS_RECREATE_QUEUED.set(false);
+    public static boolean isIrisRendererRecreateEnabled() {
+        return ENABLE_IRIS_RENDERER_RECREATE;
+    }
+
+    public static boolean applyScheduledRendererRecreate(IGetVoxyRenderSystem getter, String source) {
+        if (!ENABLE_IRIS_RENDERER_RECREATE) {
+            IRIS_RECREATE_QUEUED.set(false);
+            pendingIrisRecreateReason = "unspecified";
+            return false;
+        }
+        if (!IRIS_RECREATE_QUEUED.get()) {
+            return false;
+        }
+        // Never recreate during Iris shadow rendering; Iris may still use shadow targets in-flight.
+        if (IrisCompatManager.isShadowActive()) {
+            return false;
+        }
+        if (getter == null) {
+            IRIS_RECREATE_QUEUED.set(false);
+            pendingIrisRecreateReason = "unspecified";
+            return false;
+        }
+        try {
+            String reason = pendingIrisRecreateReason;
+            var before = getter.getVoxyRenderSystem();
+            String beforePipeline = before == null ? "none" : before.getPipelineSimpleName();
+            Logger.info("[VoxyRecreate] Applying renderer recreate at frame boundary; source='" + source + "' reason='" + reason + "' before=" + beforePipeline);
+            VoxyUniforms.resetTemporalState("renderer_recreate:" + reason);
+            getter.shutdownRenderer();
+            var mc = Minecraft.getInstance();
+            if (mc.level != null) {
+                getter.createRenderer();
             }
-        });
+            var after = getter.getVoxyRenderSystem();
+            String afterPipeline = after == null ? "none" : after.getPipelineSimpleName();
+            Logger.info("[VoxyRecreate] Renderer recreate complete; before=" + beforePipeline + " after=" + afterPipeline);
+        } catch (Throwable t) {
+            Logger.error("[VoxyRecreate] Renderer recreate failed", t);
+        } finally {
+            IRIS_RECREATE_QUEUED.set(false);
+            pendingIrisRecreateReason = "unspecified";
+        }
+        return true;
     }
 
     private static AbstractSectionRenderer.Factory<?,? extends IGeometryData> getRenderBackendFactory() {
@@ -237,7 +279,9 @@ public class VoxyRenderSystem {
                     maxSec = 7;
                 }
 
-                this.renderDistanceTracker = new RenderDistanceTracker(20,
+                int trackerOpsPerFrame = Math.max(1,
+                        Integer.getInteger("voxy.renderDistanceTrackerOpsPerFrame", 64));
+                this.renderDistanceTracker = new RenderDistanceTracker(trackerOpsPerFrame,
                         minSec,
                         maxSec,
                         this.nodeManager::addTopLevel,
@@ -469,8 +513,17 @@ public class VoxyRenderSystem {
     private int renderOpaqueFrameCount = 0;
     private int lastLoggedSectionCount = -1;
     private long lastDynamicModelBudgetNs = MODEL_BUDGET_NS_BASE;
+    private int scissorStateWarnCount = 0;
 
     public void renderOpaque(Viewport<?> viewport) {
+        var mc = Minecraft.getInstance();
+        IGetVoxyRenderSystem getter = null;
+        if (mc != null && mc.levelRenderer instanceof IGetVoxyRenderSystem levelRendererGetter) {
+            getter = levelRendererGetter;
+        }
+        if (applyScheduledRendererRecreate(getter, "renderOpaque")) {
+            return;
+        }
         if (this.shouldSkipOpaquePass(viewport)) return;
         this.logOpaqueDiagnostics(viewport);
 
@@ -492,7 +545,6 @@ public class VoxyRenderSystem {
         // cachedFramebufferId / cachedViewport* are populated in setupViewport() which is called just before.
         int oldFB = this.cachedFramebufferId;
         int boundFB = oldFB;
-        glViewport(0,0, viewport.width, viewport.height);
 
         //var target = DefaultTerrainRenderPasses.CUTOUT.getTarget();
         //boundFB = ((net.minecraft.client.texture.GlTexture) target.getColorAttachment()).getOrCreateFramebuffer(((GlBackend) RenderSystem.getDevice()).getFramebufferManager(), target.getDepthAttachment());
@@ -501,27 +553,37 @@ public class VoxyRenderSystem {
             // This is a transient condition during world join / shader reload; skip silently.
             return;
         }
+        OpaqueGlStateSnapshot glState = OpaqueGlStateSnapshot.capture();
+        if (glState.scissorEnabled() && this.scissorStateWarnCount++ < 3) {
+            Logger.warn("[DIAG] renderOpaque entry with GL_SCISSOR_TEST enabled: box="
+                    + glState.scissorX() + "," + glState.scissorY() + ","
+                    + glState.scissorW() + "x" + glState.scissorH()
+                    + " pipeline=" + this.pipeline.getClass().getSimpleName());
+        }
+        // Voxy expects full-viewport rasterization into its internal targets.
+        glDisable(GL_SCISSOR_TEST);
+        glViewport(0,0, viewport.width, viewport.height);
 
         //this.autoBalanceSubDivSize();
+        try {
+            this.pipeline.preSetup(viewport);
+            this.runChunkBoundPass(viewport);
 
-        this.pipeline.preSetup(viewport);
-        this.runChunkBoundPass(viewport);
 
+            GPUTiming.INSTANCE.marker();
+            //The entire rendering pipeline (excluding the chunkbound thing)
+            this.pipeline.runPipeline(viewport, boundFB, this.cachedViewportW, this.cachedViewportH);
+            GPUTiming.INSTANCE.marker();
 
-        GPUTiming.INSTANCE.marker();
-        //The entire rendering pipeline (excluding the chunkbound thing)
-        this.pipeline.runPipeline(viewport, boundFB, this.cachedViewportW, this.cachedViewportH);
-        GPUTiming.INSTANCE.marker();
+            this.runPostDynamicWork(viewport, startTime, oldFB);
+            GPUTiming.INSTANCE.marker();
+            TimingStatistics.postDynamic.stop();
 
-        this.runPostDynamicWork(viewport, startTime, oldFB);
-        GPUTiming.INSTANCE.marker();
-        TimingStatistics.postDynamic.stop();
-
-        GPUTiming.INSTANCE.tick();
-
-        this.restoreOpaqueGlState(oldFB);
-
-        TimingStatistics.all.stop();
+            GPUTiming.INSTANCE.tick();
+        } finally {
+            this.restoreOpaqueGlState(oldFB, glState);
+            TimingStatistics.all.stop();
+        }
 
         //TimingStatistics.I.start();
         //glFlush();
@@ -652,6 +714,10 @@ public class VoxyRenderSystem {
         TimingStatistics.postDynamic.start();
         PrintfDebugUtil.tick();
 
+        if (this.shuttingDown || IRIS_RECREATE_QUEUED.get()) {
+            return;
+        }
+
         UploadStream.INSTANCE.tick();
 
         long trackerStart = System.nanoTime();
@@ -701,7 +767,7 @@ public class VoxyRenderSystem {
         return dynamicModelBudgetNs;
     }
 
-    private void restoreOpaqueGlState(int oldFB) {
+    private void restoreOpaqueGlState(int oldFB, OpaqueGlStateSnapshot glState) {
         glBindFramebuffer(GlConst.GL_FRAMEBUFFER, oldFB);
         glViewport(this.cachedViewportX, this.cachedViewportY, this.cachedViewportW, this.cachedViewportH);
 
@@ -724,6 +790,36 @@ public class VoxyRenderSystem {
 
         for (int i = 0; i < 16; i++) {
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, i, 0);
+        }
+        glState.restore();
+    }
+
+    private record OpaqueGlStateSnapshot(
+            boolean scissorEnabled,
+            int scissorX,
+            int scissorY,
+            int scissorW,
+            int scissorH,
+            boolean depthWriteMask
+    ) {
+        private static OpaqueGlStateSnapshot capture() {
+            int[] box = new int[4];
+            glGetIntegerv(GL_SCISSOR_BOX, box);
+            return new OpaqueGlStateSnapshot(
+                    glIsEnabled(GL_SCISSOR_TEST),
+                    box[0], box[1], box[2], box[3],
+                    glGetBoolean(GL_DEPTH_WRITEMASK)
+            );
+        }
+
+        private void restore() {
+            if (this.scissorEnabled) {
+                glEnable(GL_SCISSOR_TEST);
+                glScissor(this.scissorX, this.scissorY, this.scissorW, this.scissorH);
+            } else {
+                glDisable(GL_SCISSOR_TEST);
+            }
+            glDepthMask(this.depthWriteMask);
         }
     }
 
@@ -782,7 +878,7 @@ public class VoxyRenderSystem {
     }
 
     private boolean frexStillHasWork() {
-        if (!VoxyClient.isFrexActive()) {
+        if (!VoxyClient.isFrexActive() || this.shuttingDown || IRIS_RECREATE_QUEUED.get()) {
             return false;
         }
         //If frex is running we must tick everything to ensure correctness
@@ -804,16 +900,6 @@ public class VoxyRenderSystem {
             return null;
         }
         return this.viewportSelector.getViewport();
-    }
-
-    public VoxyLoadingSnapshot getLoadingSnapshot() {
-        int sectionCount = this.pipeline.getSectionCount();
-        return new VoxyLoadingSnapshot(
-                this.renderGen.getTaskCount(),
-                this.modelService.getProcessingCount(),
-                this.nodeManager.hasWork(),
-                sectionCount,
-                this.shuttingDown);
     }
 
     public void addDebugInfo(List<String> debug) {

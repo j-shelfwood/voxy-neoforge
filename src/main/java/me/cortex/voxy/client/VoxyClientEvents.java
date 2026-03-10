@@ -69,6 +69,10 @@ public class VoxyClientEvents {
         if (!VoxyConfig.CONFIG.isEnabled() || !VoxyNeoForgeConfig.isRenderingEnabled()) {
             return;
         }
+        if (!VoxyNeoForgeConfig.isLoadingIndicatorEnabled()) {
+            return;
+        }
         VoxyLoadingHud.INSTANCE.render(event.getGuiGraphics(), event.getPartialTick());
     }
+
 }

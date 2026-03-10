@@ -148,6 +148,13 @@ public final class EmbeddiumOptionsCompat {
         OptionGroup debug = OptionGroup.createBuilder()
                 .setId(ResourceLocation.fromNamespaceAndPath("voxy", "debug"))
                 .add(booleanOption(
+                        "loading_indicator",
+                        "voxy.config.general.loading_indicator",
+                        "voxy.config.general.loading_indicator.tooltip",
+                        (cfg, value) -> cfg.setLoadingIndicatorEnabled(value),
+                        VoxyConfig::isLoadingIndicatorEnabled,
+                        OptionImpact.LOW))
+                .add(booleanOption(
                         "render_statistics",
                         "voxy.config.general.render_statistics",
                         "voxy.config.general.render_statistics.tooltip",

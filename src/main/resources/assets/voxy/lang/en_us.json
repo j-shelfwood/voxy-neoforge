@@ -43,6 +43,9 @@
   "voxy.config.general.render_statistics": "Enable render statistics",
   "voxy.config.general.render_statistics.tooltip": "Enable render statistics in F3 menu, useful for debugging",
 
+  "voxy.config.general.loading_indicator": "Show loading indicator",
+  "voxy.config.general.loading_indicator.tooltip": "Shows/hides the Voxy loading/progress HUD overlay",
+
   "voxy.config.general.render_distance_offset": "Depth mask RD offset",
   "voxy.config.general.render_distance_offset.tooltip": "Extra chunk rings added to the LOD depth-mask radius. Vanilla MC loads renderDistance+3 rings for lighting; 3 is the correct default. Raise if you see gaps, lower if the mask extends too far. Live update.",
 
