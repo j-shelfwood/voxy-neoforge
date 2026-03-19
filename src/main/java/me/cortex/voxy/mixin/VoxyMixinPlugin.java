@@ -12,6 +12,8 @@ public class VoxyMixinPlugin implements IMixinConfigPlugin {
     private static final String IRIS_API_CLASS = "net.irisshaders.iris.api.v0.IrisApi";
     private static final String EMBEDDIUM_CLASS = "org.embeddedt.embeddium.impl.Embeddium";
     private static final String EMBEDDIUM_PRELAUNCH_CLASS = "org.embeddedt.embeddium.impl.EmbeddiumPreLaunch";
+    private static final String MONOCLE_CLASS = "dev.ferriarnus.monocle.Monocle";
+    private static final String MONOCLE_TRANSFORMER_CLASS = "dev.ferriarnus.monocle.ShaderTransformer";
 
     @Override
     public void onLoad(String mixinPackage) {
@@ -32,6 +34,13 @@ public class VoxyMixinPlugin implements IMixinConfigPlugin {
         if (mixinClassName.contains(".mixin.iris.")) {
             // Iris shader-pack integration must be applied before Iris creates its pipelines.
             // Use class presence checks because ModList/LoadingModList may not be initialized yet.
+            return isLoadedOrPresent("iris", IRIS_CLASS, IRIS_API_CLASS);
+        }
+        if (mixinClassName.contains(".mixin.monocle.")) {
+            // Monocle fixup mixins require Iris (they target Iris + Monocle classes).
+            // Apply when either Monocle or Iris is present — MixinIrisTransformPatcher targets
+            // Iris's CompositeRenderer regardless of Monocle, and MixinMonocleShaderTransformer
+            // uses require=0 to fail-soft if Monocle is absent.
             return isLoadedOrPresent("iris", IRIS_CLASS, IRIS_API_CLASS);
         }
         return true;

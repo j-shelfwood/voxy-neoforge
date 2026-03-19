@@ -15,9 +15,17 @@ ivec3 unpackPos(ivec2 pos) {
 }
 
 bool shouldRender(ivec3 icorner) {
-    vec3 corner = vec3(mix(mix(ivec3(0), icorner-1, greaterThan(icorner-1, ivec3(0))), icorner+17, lessThan(icorner+17, ivec3(0))))-negInnerBlock.xyz;
-    bool visible = (corner.x*corner.x + corner.z*corner.z) < (negInnerBlock.w*negInnerBlock.w);
-    visible = visible && abs(corner.y) < negInnerBlock.w;
+    // Match the nearest-point-in-AABB test used by vanilla chunk visibility boundaries.
+    // Section AABB is [icorner, icorner + 16], find nearest point to local camera origin.
+    ivec3 maxCorner = icorner + 16;
+    ivec3 nearest = ivec3(0);
+    nearest.x = (icorner.x > 0) ? icorner.x : ((maxCorner.x < 0) ? maxCorner.x : 0);
+    nearest.y = (icorner.y > 0) ? icorner.y : ((maxCorner.y < 0) ? maxCorner.y : 0);
+    nearest.z = (icorner.z > 0) ? icorner.z : ((maxCorner.z < 0) ? maxCorner.z : 0);
+
+    vec3 dist = vec3(nearest) - negInnerBlock.xyz;
+    bool visible = (dist.x * dist.x + dist.z * dist.z) < (negInnerBlock.w * negInnerBlock.w);
+    visible = visible && abs(dist.y) < negInnerBlock.w;
     return visible;
 }
 

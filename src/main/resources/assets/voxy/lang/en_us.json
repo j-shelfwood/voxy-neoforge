@@ -47,7 +47,7 @@
   "voxy.config.general.loading_indicator.tooltip": "Shows/hides the Voxy loading/progress HUD overlay",
 
   "voxy.config.general.render_distance_offset": "Depth mask RD offset",
-  "voxy.config.general.render_distance_offset.tooltip": "Extra chunk rings added to the LOD depth-mask radius. Vanilla MC loads renderDistance+3 rings for lighting; 3 is the correct default. Raise if you see gaps, lower if the mask extends too far. Live update.",
+  "voxy.config.general.render_distance_offset.tooltip": "Extra chunk rings added to the LOD depth-mask radius. 0 = exact vanilla/Embeddium boundary. Positive = expand mask outward, negative = shrink inward. Live update.",
 
   "voxy.config.general.lod_boundary_buffer": "LOD boundary fine-tune (blocks)",
   "voxy.config.general.lod_boundary_buffer.tooltip": "Fine-tunes the depth mask boundary in blocks. Positive = shrink mask (LODs bleed inward, hides gap). Negative = expand mask. 0 = exact match. Live update — adjust while flying to find the sweet spot.",

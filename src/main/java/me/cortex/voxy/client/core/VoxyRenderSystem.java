@@ -189,6 +189,10 @@ public class VoxyRenderSystem {
             String reason = pendingIrisRecreateReason;
             var before = getter.getVoxyRenderSystem();
             String beforePipeline = before == null ? "none" : before.getPipelineSimpleName();
+            // Snapshot the built-section mask before shutdown so the new renderer can inherit it.
+            // Without this, the new ChunkBoundRenderer starts empty and LODs render over clouds/Iris
+            // geometry until Embeddium re-fires section-built events (which can take many seconds).
+            var oldChunkBoundRenderer = before != null ? before.chunkBoundRenderer : null;
             Logger.info("[VoxyRecreate] Applying renderer recreate at frame boundary; source='" + source + "' reason='" + reason + "' before=" + beforePipeline);
             VoxyUniforms.resetTemporalState("renderer_recreate:" + reason);
             getter.shutdownRenderer();
@@ -197,6 +201,11 @@ public class VoxyRenderSystem {
                 getter.createRenderer();
             }
             var after = getter.getVoxyRenderSystem();
+            // Replay the old section mask into the new renderer immediately so LODs are correctly
+            // depth-masked from the first frame after recreate (fixes cloud/shader-pass z-fighting).
+            if (after != null && oldChunkBoundRenderer != null) {
+                after.chunkBoundRenderer.replayFrom(oldChunkBoundRenderer);
+            }
             String afterPipeline = after == null ? "none" : after.getPipelineSimpleName();
             Logger.info("[VoxyRecreate] Renderer recreate complete; before=" + beforePipeline + " after=" + afterPipeline);
         } catch (Throwable t) {

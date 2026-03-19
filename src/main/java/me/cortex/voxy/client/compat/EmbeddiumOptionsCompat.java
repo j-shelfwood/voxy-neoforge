@@ -136,6 +136,22 @@ public final class EmbeddiumOptionsCompat {
                         VoxyConfig::enableShaderPackFogOverride,
                         OptionImpact.LOW))
                 .add(intSliderOption(
+                        "render_distance_offset",
+                        "voxy.config.general.render_distance_offset",
+                        "voxy.config.general.render_distance_offset.tooltip",
+                        -16, 16, 1, ControlValueFormatter.number(),
+                        (cfg, value) -> cfg.setRenderDistanceOffset(value),
+                        VoxyConfig::getRenderDistanceOffset,
+                        OptionImpact.LOW))
+                .add(intSliderOption(
+                        "lod_boundary_buffer",
+                        "voxy.config.general.lod_boundary_buffer",
+                        "voxy.config.general.lod_boundary_buffer.tooltip",
+                        -128, 128, 1, ControlValueFormatter.number(),
+                        (cfg, value) -> cfg.setLodBoundaryBuffer(value),
+                        VoxyConfig::getLodBoundaryBuffer,
+                        OptionImpact.LOW))
+                .add(intSliderOption(
                         "earth_curve_ratio",
                         "voxy.config.general.earth_curve_ratio",
                         "voxy.config.general.earth_curve_ratio.tooltip",

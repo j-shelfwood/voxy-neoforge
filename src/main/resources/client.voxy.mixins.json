@@ -33,7 +33,9 @@
     "iris.MixinPackRenderTargetDirectives",
     "iris.MixinProgramSet",
     "iris.MixinShaderPackSourceNames",
-    "iris.MixinStandardMacros"
+    "iris.MixinStandardMacros",
+    "monocle.MixinMonocleShaderTransformer",
+    "monocle.MixinIrisTransformPatcher"
   ],
   "injectors": {
     "defaultRequire": 1

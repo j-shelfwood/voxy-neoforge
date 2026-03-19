@@ -2,6 +2,7 @@ package me.cortex.voxy.client.core.rendering;
 
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.AbstractRenderPipeline;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlVertexArray;
@@ -102,7 +103,11 @@ public class ChunkBoundRenderer {
         long ptr = UploadStream.INSTANCE.upload(this.uniformBuffer, 0, 128);
         long matPtr = ptr; ptr += 4 * 4 * 4;
 
-        final float renderDistance = Minecraft.getInstance().options.getEffectiveRenderDistance() * 16.0f;
+        final float vanillaRenderDistanceBlocks = Minecraft.getInstance().options.getEffectiveRenderDistance() * 16.0f;
+        final float offsetBlocks = VoxyConfig.CONFIG.getRenderDistanceOffset() * 16.0f;
+        // Positive buffer shrinks mask inward to keep LODs visible slightly longer near the handoff edge.
+        final float boundaryBufferBlocks = VoxyConfig.CONFIG.getLodBoundaryBuffer();
+        final float renderDistance = Math.max(16.0f, vanillaRenderDistanceBlocks + offsetBlocks - boundaryBufferBlocks);
 
         {
             int sx = (int) (viewport.cameraX);
@@ -216,6 +221,22 @@ public class ChunkBoundRenderer {
             return;
         }
         this.chunk2idx.clear();
+    }
+
+    /**
+     * Replay all currently-tracked section positions from {@code source} into this renderer.
+     * Called after a /voxy reload so the new ChunkBoundRenderer inherits the built-section
+     * mask from the old one without waiting for Embeddium to re-fire section-built events.
+     */
+    public void replayFrom(ChunkBoundRenderer source) {
+        if (this.freed || source.freed) return;
+        int count = source.chunk2idx.size();
+        if (count == 0) return;
+        // idx2chunk[0..size-1] holds the canonical packed SectionPos longs.
+        for (int i = 0; i < count; i++) {
+            this.addSection(source.idx2chunk[i]);
+        }
+        Logger.info("[ChunkBoundRenderer] Replayed " + count + " built sections from previous renderer");
     }
 
     public int getPendingAddCount() {

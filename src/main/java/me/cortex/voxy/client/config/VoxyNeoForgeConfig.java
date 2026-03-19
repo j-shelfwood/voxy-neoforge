@@ -34,6 +34,8 @@ public class VoxyNeoForgeConfig {
     private static final int DEFAULT_EARTH_CURVE_RATIO = 0;
     private static final boolean DEFAULT_RENDER_STATISTICS = false;
     private static final boolean DEFAULT_LOADING_INDICATOR = true;
+    private static final int DEFAULT_RENDER_DISTANCE_OFFSET = 0;
+    private static final int DEFAULT_LOD_BOUNDARY_BUFFER = 0;
 
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
@@ -109,6 +111,16 @@ public class VoxyNeoForgeConfig {
     static final ModConfigSpec.BooleanValue LOADING_INDICATOR = BUILDER
             .comment("Show Voxy loading/progress indicator overlay")
             .define("loadingIndicator", DEFAULT_LOADING_INDICATOR);
+
+    static final ModConfigSpec.IntValue RENDER_DISTANCE_OFFSET = BUILDER
+            .comment("Extra chunk rings for depth mask radius (live update)",
+                    "Positive values grow vanilla mask, negative values shrink it")
+            .defineInRange("renderDistanceOffset", DEFAULT_RENDER_DISTANCE_OFFSET, -16, 16);
+
+    static final ModConfigSpec.IntValue LOD_BOUNDARY_BUFFER = BUILDER
+            .comment("Fine-tune LOD handoff boundary in blocks (live update)",
+                    "Positive shrinks mask inward (more LOD bleed), negative expands mask")
+            .defineInRange("lodBoundaryBuffer", DEFAULT_LOD_BOUNDARY_BUFFER, -128, 128);
 
     public static final ModConfigSpec SPEC = BUILDER.build();
 
@@ -292,6 +304,24 @@ public class VoxyNeoForgeConfig {
         }
     }
 
+    public static int getRenderDistanceOffset() {
+        if (!configLoaded) return DEFAULT_RENDER_DISTANCE_OFFSET;
+        try {
+            return RENDER_DISTANCE_OFFSET.get();
+        } catch (IllegalStateException ignored) {
+            return DEFAULT_RENDER_DISTANCE_OFFSET;
+        }
+    }
+
+    public static int getLodBoundaryBuffer() {
+        if (!configLoaded) return DEFAULT_LOD_BOUNDARY_BUFFER;
+        try {
+            return LOD_BOUNDARY_BUFFER.get();
+        } catch (IllegalStateException ignored) {
+            return DEFAULT_LOD_BOUNDARY_BUFFER;
+        }
+    }
+
     // ========== Setters (for Embeddium UI integration) ==========
 
     public static void setEnabled(boolean value) {
@@ -349,5 +379,13 @@ public class VoxyNeoForgeConfig {
 
     public static void setLoadingIndicatorEnabled(boolean value) {
         LOADING_INDICATOR.set(value);
+    }
+
+    public static void setRenderDistanceOffset(int value) {
+        RENDER_DISTANCE_OFFSET.set(value);
+    }
+
+    public static void setLodBoundaryBuffer(int value) {
+        LOD_BOUNDARY_BUFFER.set(value);
     }
 }

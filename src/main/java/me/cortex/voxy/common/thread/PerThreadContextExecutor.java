@@ -87,8 +87,17 @@ public class PerThreadContextExecutor extends TrackedObject {
             throw new IllegalStateException("Tried shutting down a executor twice");
         }
         this.isLive = false;
+        // Wait up to 2 seconds for currently-running jobs to finish.
+        // Avoids a deadlock where the render thread blocks here while a worker
+        // waits for render-thread resources (e.g. model texture uploads).
+        long deadline = System.nanoTime() + 2_000_000_000L;
         while (this.currentRunning.get() != 0) {
-            Thread.onSpinWait();//TODO: maybe add a sleep or something
+            if (System.nanoTime() > deadline) {
+                Logger.warn("[PerThreadContextExecutor] Timed out waiting for " + this.currentRunning.get()
+                        + " running job(s) to finish during shutdown — continuing anyway");
+                break;
+            }
+            Thread.onSpinWait();
         }
         for (var ctx : this.contexts.clear()) {
             ctx.cleanup.run();

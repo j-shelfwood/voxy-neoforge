@@ -72,6 +72,14 @@ public class VoxyConfig {
         return VoxyNeoForgeConfig.isLoadingIndicatorEnabled();
     }
 
+    public int getRenderDistanceOffset() {
+        return VoxyNeoForgeConfig.getRenderDistanceOffset();
+    }
+
+    public int getLodBoundaryBuffer() {
+        return VoxyNeoForgeConfig.getLodBoundaryBuffer();
+    }
+
     // ========== Delegated Setters ==========
 
     public void setEnabled(boolean value) {
@@ -124,6 +132,14 @@ public class VoxyConfig {
 
     public void setLoadingIndicatorEnabled(boolean value) {
         VoxyNeoForgeConfig.setLoadingIndicatorEnabled(value);
+    }
+
+    public void setRenderDistanceOffset(int value) {
+        VoxyNeoForgeConfig.setRenderDistanceOffset(value);
+    }
+
+    public void setLodBoundaryBuffer(int value) {
+        VoxyNeoForgeConfig.setLodBoundaryBuffer(value);
     }
 
     // ========== Save ==========

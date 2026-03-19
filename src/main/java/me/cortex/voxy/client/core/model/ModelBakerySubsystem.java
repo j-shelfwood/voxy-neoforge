@@ -30,7 +30,7 @@ public class ModelBakerySubsystem {
         this.mapper = mapper;
         this.factory = new ModelFactory(mapper, this.storage);
         this.processingThread = new Thread(()->{//TODO replace this with something good/integrate it into the async processor so that we just have less threads overall
-            while (this.isRunning) {
+            while (this.isRunning && !Thread.currentThread().isInterrupted()) {
                 this.factory.processAllThings();
                 // Sleep less when there's a large backlog (initial world load with many block states).
                 // Drops to 1ms during heavy load so baked textures are available sooner,
@@ -39,7 +39,9 @@ public class ModelBakerySubsystem {
                 try {
                     Thread.sleep(sleepMs);
                 } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
+                    // Interrupted during shutdown — exit cleanly
+                    Thread.currentThread().interrupt();
+                    break;
                 }
             }
         }, "Model factory processor");
@@ -81,10 +83,17 @@ public class ModelBakerySubsystem {
 
     public void shutdown() {
         this.isRunning = false;
+        this.processingThread.interrupt();
         try {
-            this.processingThread.join();
+            // Give the processing thread a short window to exit cleanly.
+            // Do NOT block the render thread indefinitely — the thread only does CPU work
+            // and can be abandoned safely; free() below releases GPU resources on the render thread.
+            this.processingThread.join(500);
         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            Thread.currentThread().interrupt();
+        }
+        if (this.processingThread.isAlive()) {
+            Logger.warn("[ModelBakerySubsystem] Processing thread did not exit within 500ms, continuing shutdown anyway");
         }
 
         this.factory.free();
