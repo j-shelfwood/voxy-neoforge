@@ -13,9 +13,12 @@ import org.lwjgl.opengl.ARBDrawBuffersBlend;
 
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL33.*;
@@ -23,6 +26,22 @@ import static org.lwjgl.opengl.GL33.*;
 public class IrisShaderPatch {
     public static final int VERSION = ((IntSupplier)()->1).getAsInt();
     public static final int SHADER_DEFINE_VERSION = 1;
+
+    /**
+     * Set to true when the active patch was created via the DH_NATIVE_CANDIDATE path
+     * (pack has dh_terrain.fsh but no voxy.json). Used by MixinStandardMacros to inject
+     * {@code #define DISTANT_HORIZONS} so the pack's composite/deferred shaders handle LODs.
+     */
+    public static volatile boolean DISTANT_HORIZONS_MODE = false;
+
+    /**
+     * Whether the active IrisShaderPatch was synthesised for DH_NATIVE_CANDIDATE mode.
+     * Instance-level flag so MixinIrisRenderingPipeline can toggle DISTANT_HORIZONS_MODE correctly.
+     */
+    public final boolean isDhNativeCandidate;
+
+    private static final Pattern RENDERTARGETS_PATTERN =
+            Pattern.compile("/\\*\\s*RENDERTARGETS\\s*:\\s*([\\d,\\s]+)\\*/");
 
 
     private static final class SSBODeserializer implements JsonDeserializer<Int2ObjectOpenHashMap<String>> {
@@ -210,15 +229,21 @@ public class IrisShaderPatch {
     private final PatchGson patchData;
     private final ShaderPack pack;
     private final Int2ObjectMap<String> ssbos;
-    private IrisShaderPatch(PatchGson patchData, ShaderPack pack) {
+
+    private IrisShaderPatch(PatchGson patchData, ShaderPack pack, boolean isDhNativeCandidate) {
         this.patchData = patchData;
         this.pack = pack;
+        this.isDhNativeCandidate = isDhNativeCandidate;
 
         if (patchData.ssbos == null) {
             this.ssbos = new Int2ObjectOpenHashMap<>();
         } else {
             this.ssbos = patchData.ssbos;
         }
+    }
+
+    private IrisShaderPatch(PatchGson patchData, ShaderPack pack) {
+        this(patchData, pack, false);
     }
 
     public boolean useViewportDims() {
@@ -322,9 +347,97 @@ public class IrisShaderPatch {
         return builder.create();
     }
 
+    /**
+     * Parse {@code /* RENDERTARGETS: N,M *\/} from a fragment shader source.
+     * Returns the indices as an int[]. Falls back to {0} if no directive found.
+     */
+    private static int[] parseRenderTargets(String fragmentSource) {
+        if (fragmentSource == null || fragmentSource.isBlank()) {
+            return new int[]{0};
+        }
+        Matcher m = RENDERTARGETS_PATTERN.matcher(fragmentSource);
+        if (!m.find()) {
+            return new int[]{0};
+        }
+        String[] parts = m.group(1).split(",");
+        List<Integer> targets = new ArrayList<>();
+        for (String part : parts) {
+            String trimmed = part.trim();
+            if (!trimmed.isEmpty()) {
+                try {
+                    targets.add(Integer.parseInt(trimmed));
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        if (targets.isEmpty()) return new int[]{0};
+        return targets.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    /**
+     * DH_NATIVE_CANDIDATE opaque patch.
+     * Applies vanilla-style directional face shading and lightmap tinting so LODs look
+     * consistent with nearby vanilla geometry even though the pack's full lighting pipeline
+     * is not applied (it expects DH vertex data that Voxy does not provide).
+     *
+     * Face encoding (getFace() in quads.frag):
+     *   0 = bottom (Y-), 1 = top (Y+), 2 = north (Z-), 3 = south (Z+), 4 = west (X-), 5 = east (X+)
+     * Vanilla directional multipliers mirror BlockModelRenderer:
+     *   top=1.0, bottom=0.5, sides=0.8
+     */
+    private static final String DH_NATIVE_OPAQUE_PATCH =
+            "layout(location = 0) out vec4 outColour;\n" +
+            "uniform sampler2D lightmap;\n" +
+            "void voxy_emitFragment(VoxyFragmentParameters parameters) {\n" +
+            "    // Vanilla directional shading: top=1.0, bottom=0.5, sides=0.8\n" +
+            "    float faceMult = (parameters.face == 1u) ? 1.0\n" +
+            "                   : (parameters.face == 0u) ? 0.5\n" +
+            "                   : 0.8;\n" +
+            "    vec4 light = texture(lightmap, parameters.lightMap);\n" +
+            "    outColour = parameters.sampledColour * parameters.tinting * light * faceMult;\n" +
+            "}\n";
+
+    /**
+     * Build a synthetic IrisShaderPatch for DH_NATIVE_CANDIDATE mode:
+     * the pack has dh_terrain.fsh (and optionally dh_water.fsh) but no voxy.json.
+     * Draw buffers are parsed from the pack's fragment shader RENDERTARGETS directives.
+     * The opaque patch is a minimal passthrough that outputs tinted LOD colour to those targets.
+     */
+    private static IrisShaderPatch makeDhNativePatch(ShaderPack ipack, AbsolutePackPath directory,
+                                                      Function<AbsolutePackPath, String> sourceProvider) {
+        String dhTerrainFsh = sourceProvider.apply(directory.resolve("dh_terrain.fsh"));
+        String dhWaterFsh   = sourceProvider.apply(directory.resolve("dh_water.fsh"));
+
+        int[] opaqueTargets     = parseRenderTargets(dhTerrainFsh);
+        int[] translucentTargets = dhWaterFsh != null ? parseRenderTargets(dhWaterFsh) : opaqueTargets;
+
+        PatchGson pg = new PatchGson();
+        pg.version = VERSION;
+        pg.opaqueDrawBuffers     = opaqueTargets;
+        pg.translucentDrawBuffers = translucentTargets;
+        pg.uniforms              = new String[0]; // no custom uniforms — CommonUniforms covers DH needs
+        // lightmap sampler — IrisVoxyRenderPipelineData.createImageSet() maps "lightmap" → LightMapHelper
+        Object2ObjectLinkedOpenHashMap<String, String> samplers = new Object2ObjectLinkedOpenHashMap<>();
+        samplers.put("lightmap", "sampler2D");
+        pg.samplers              = samplers;
+        pg.opaquePatchData       = DH_NATIVE_OPAQUE_PATCH;
+        pg.translucentPatchData  = null;           // use opaque path for translucent too
+        pg.excludeLodsFromVanillaDepth = true;
+
+        Logger.info("[IrisShaderPatch] DH_NATIVE_CANDIDATE: dh_terrain.fsh found, synthetic patch created"
+                + " opaqueTargets=" + java.util.Arrays.toString(opaqueTargets)
+                + " translucentTargets=" + java.util.Arrays.toString(translucentTargets));
+        return new IrisShaderPatch(pg, ipack, true);
+    }
+
     public static IrisShaderPatch makePatch(ShaderPack ipack, AbsolutePackPath directory, Function<AbsolutePackPath, String> sourceProvider) {
         String voxyPatchData = sourceProvider.apply(directory.resolve("voxy.json"));
         if (voxyPatchData == null) {//No voxy patch data in shaderpack
+            // DH_NATIVE_CANDIDATE: if the pack has dh_terrain.fsh, create a synthetic passthrough patch
+            // so IrisVoxyRenderPipeline activates and LODs render into the pack's gbuffer targets.
+            String dhTerrainFsh = sourceProvider.apply(directory.resolve("dh_terrain.fsh"));
+            if (dhTerrainFsh != null) {
+                return makeDhNativePatch(ipack, directory, sourceProvider);
+            }
             return null;
         }
 

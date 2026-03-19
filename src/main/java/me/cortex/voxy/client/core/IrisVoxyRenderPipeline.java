@@ -28,10 +28,10 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
             System.getProperty("voxy.irisTemporalPass", "false").equalsIgnoreCase("true");
     private static final boolean ENABLE_GLSL_COMPAT_FIXES =
             System.getProperty("voxy.irisGlslCompatFixes", "false").equalsIgnoreCase("true");
-    // Depth bridging into vanilla can occlude late translucent effects (clouds/particles/aurora)
-    // with distant LOD depth. Keep it opt-in for shader-pack stability.
-    private static final boolean COPY_DEPTH_TO_VANILLA =
-            System.getProperty("voxy.copyDepthToVanilla", "false").equalsIgnoreCase("true");
+    // Override: force-enable or force-disable the depth bridge regardless of voxy.json setting.
+    // "true" = always copy LOD depth to vanilla FB; "false" = always skip; absent = use voxy.json.
+    private static final String COPY_DEPTH_TO_VANILLA_OVERRIDE =
+            System.getProperty("voxy.copyDepthToVanilla", "");
     // If depth bridge is enabled, choose which LOD depth buffer to export.
     private static final boolean COPY_TRANSLUCENT_DEPTH_TO_VANILLA =
             System.getProperty("voxy.copyTranslucentDepthToVanilla", "false").equalsIgnoreCase("true");
@@ -180,7 +180,12 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
 
     @Override
     protected void finish(Viewport<?> viewport, int sourceFrameBuffer, int srcWidth, int srcHeight) {
-        if (COPY_DEPTH_TO_VANILLA && this.data.renderToVanillaDepth
+        // Default: copy depth to vanilla FB when voxy.json says so (emitToVanillaDepth = !excludeLodsFromVanillaDepth).
+        // System property "voxy.copyDepthToVanilla=true/false" overrides the per-pack setting.
+        boolean copyDepth = COPY_DEPTH_TO_VANILLA_OVERRIDE.equalsIgnoreCase("true") ? true
+                : COPY_DEPTH_TO_VANILLA_OVERRIDE.equalsIgnoreCase("false") ? false
+                : this.data.renderToVanillaDepth;
+        if (copyDepth
                 && srcWidth == viewport.width  && srcHeight == viewport.height) {//We can only depthblit out if destination size is the same
             glColorMask(false, false, false, false);
             int depthSourceTex = COPY_TRANSLUCENT_DEPTH_TO_VANILLA
@@ -256,7 +261,10 @@ public class IrisVoxyRenderPipeline extends AbstractRenderPipeline {
         debug.add("Using: " + this.getClass().getSimpleName());
         debug.add("Iris temporal pass: " + (ENABLE_IRIS_TEMPORAL_PASS ? "enabled" : "disabled"));
         debug.add("Iris GLSL compat fixes: " + (ENABLE_GLSL_COMPAT_FIXES ? "enabled" : "disabled"));
-        debug.add("Iris depth bridge: " + (COPY_DEPTH_TO_VANILLA
+        boolean copyDepth = COPY_DEPTH_TO_VANILLA_OVERRIDE.equalsIgnoreCase("true") ? true
+                : COPY_DEPTH_TO_VANILLA_OVERRIDE.equalsIgnoreCase("false") ? false
+                : this.data.renderToVanillaDepth;
+        debug.add("Iris depth bridge: " + (copyDepth
                 ? (COPY_TRANSLUCENT_DEPTH_TO_VANILLA ? "translucent" : "opaque-only")
                 : "disabled"));
         super.addDebug(debug);

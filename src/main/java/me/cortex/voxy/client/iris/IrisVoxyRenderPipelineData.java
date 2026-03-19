@@ -57,6 +57,8 @@ public class IrisVoxyRenderPipelineData {
     public final String TAA;
     public final boolean useViewportDims;
     public final boolean deferTranslucency;
+    /** True when this pipeline was built from DH_NATIVE_CANDIDATE mode (pack has dh_terrain.fsh, no voxy.json). */
+    public final boolean isDhNativeCandidate;
 
     private IrisVoxyRenderPipelineData(IrisShaderPatch patch, int[] opaqueDrawTargets, int[] translucentDrawTargets, StructLayout uniformSet, Runnable blendingSetup, ImageSet imageSet, SSBOSet ssboSet, Set<String> missingUniforms) {
         this.opaqueDrawTargets = opaqueDrawTargets;
@@ -75,6 +77,7 @@ public class IrisVoxyRenderPipelineData {
         this.resolutionScale = patch.getRenderScale();
         this.useViewportDims = patch.useViewportDims();
         this.deferTranslucency = patch.deferedTranslucentRendering();
+        this.isDhNativeCandidate = patch.isDhNativeCandidate;
     }
 
     public SSBOSet getSsboSet() {

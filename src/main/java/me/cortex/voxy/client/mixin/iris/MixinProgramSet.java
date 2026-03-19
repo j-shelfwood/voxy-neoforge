@@ -29,6 +29,9 @@ public class MixinProgramSet implements IGetVoxyPatchData {
         // does not leave Iris ProgramSet in a permanently unpatched state.
         if (IrisUtil.SHADER_SUPPORT) {
             this.patchData = IrisShaderPatch.makePatch(pack, directory, sourceProvider);
+            // Update the global DH impersonation flag so MixinStandardMacros injects
+            // #define DISTANT_HORIZONS for packs using the DH_NATIVE_CANDIDATE path.
+            IrisShaderPatch.DISTANT_HORIZONS_MODE = (this.patchData != null && this.patchData.isDhNativeCandidate);
         }
         /*
         if (this.patchData != null) {
