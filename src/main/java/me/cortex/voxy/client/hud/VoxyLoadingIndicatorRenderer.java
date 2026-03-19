@@ -5,8 +5,10 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.util.Mth;
 
 final class VoxyLoadingIndicatorRenderer {
-    private static final int WIDTH = 170;
-    private static final int HEIGHT = 84;
+    // Animation radius is 21px; pad 8px each side → 58×58 box
+    private static final int ANIM_RADIUS = 21;
+    private static final int PADDING = 8;
+    private static final int SIZE = (ANIM_RADIUS + PADDING) * 2;
     private static final int MARGIN = 10;
 
     private static final int MODEL_COLOR = 0x69BCFF;
@@ -22,16 +24,12 @@ final class VoxyLoadingIndicatorRenderer {
 
         int x2 = gui.guiWidth() - MARGIN;
         int y2 = gui.guiHeight() - MARGIN;
-        int x1 = x2 - WIDTH;
-        int y1 = y2 - HEIGHT;
+        int x1 = x2 - SIZE;
+        int y1 = y2 - SIZE;
 
-        int bg = color(0x0C1014, 0.68f * model.alpha);
-        gui.fill(x1, y1, x2, y2, bg);
-        gui.fill(x1 + 1, y1 + 1, x2 - 1, y2 - 1, color(0x121A22, 0.58f * model.alpha));
-        gui.fill(x1 + 3, y1 + 3, x2 - 3, y2 - 3, color(0x0B1218, 0.46f * model.alpha));
-
-        int cx = x1 + 34;
-        int cy = y1 + 45;
+        // No background card — animation only
+        int cx = x1 + ANIM_RADIUS + PADDING;
+        int cy = y1 + ANIM_RADIUS + PADDING;
         float meshLevel = queueLevel(model.meshQueue, 2200f);
         float modelLevel = queueLevel(model.modelQueue, 950f);
         float nodeLevel = model.nodePending ? 1f : (0.12f + 0.07f * (1.0f - Math.abs(0.5f - model.pulse) * 2.0f));
@@ -51,9 +49,10 @@ final class VoxyLoadingIndicatorRenderer {
         // Sweeping beam communicates active traversal/scanning.
         drawSweep(gui, cx, cy, 21, sweep, model.alpha);
 
-        renderModeText(gui, x1 + 8, y1 + 7, model);
-        renderMetricLegend(gui, x1 + 68, y1 + 21, model, meshLevel, modelLevel, nodeLevel, residencyLevel);
-        renderScannerLegend(gui, x1 + 8, y1 + 73, model);
+        // Text rendering removed - animation only
+        // renderModeText(gui, x1 + 8, y1 + 7, model);
+        // renderMetricLegend(gui, x1 + 68, y1 + 21, model, meshLevel, modelLevel, nodeLevel, residencyLevel);
+        // renderScannerLegend(gui, x1 + 8, y1 + 73, model);
     }
 
     private static void drawWorkArc(GuiGraphics gui, int cx, int cy, int radius, int thickness, float phase, float level, int rgb, float alpha) {
