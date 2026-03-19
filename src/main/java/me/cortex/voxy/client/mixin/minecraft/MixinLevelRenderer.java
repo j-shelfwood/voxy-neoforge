@@ -45,11 +45,11 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
         }
 
         // allChanged() can fire multiple times during shader/dimension transitions.
-        // Route through the debounced scheduler to avoid teardown/recreate storms.
+        // Always shut down the existing renderer first, then queue a single deferred
+        // recreate at the next frame boundary. Do NOT create immediately here — that
+        // would produce two creates per allChanged() (one immediate + one deferred).
+        this.shutdownRenderer();
         VoxyRenderSystem.scheduleRendererRecreate("LevelRenderer#allChanged");
-        if (this.renderer == null) {
-            this.createRenderer();
-        }
     }
 
     @Inject(method = "setLevel", at = @At("HEAD"))
