@@ -68,8 +68,8 @@ public class WorldImporter implements IDataImporter {
         this.world = worldEngine;
         this.service = sm.createService(()->new Pair<>(()->this.jobQueue.poll().run(), ()->{}), 3, "World importer", runChecker);
 
-        var biomeRegistry = mcWorld.registryAccess().lookupOrThrow(Registries.BIOME);
-        var defaultBiome = biomeRegistry.getOrThrow(Biomes.PLAINS);
+        var biomeRegistry = mcWorld.registryAccess().registryOrThrow(Registries.BIOME);
+        var defaultBiome = biomeRegistry.getHolderOrThrow(Biomes.PLAINS);
         this.defaultBiomeProvider = new PalettedContainerRO<>() {
             @Override
             public Holder<Biome> get(int x, int y, int z) {
@@ -114,10 +114,16 @@ public class WorldImporter implements IDataImporter {
             }
         };
 
-        // MC 1.21.1: PalettedContainerFactory removed - need to find correct codec creation API
-        // TODO: Fix codec creation for PalettedContainer in MC 1.21.1
-        this.biomeCodec = null; // Placeholder
-        this.blockStateCodec = null; // Placeholder
+        this.blockStateCodec = PalettedContainer.codecRW(
+                Block.BLOCK_STATE_REGISTRY,
+                BlockState.CODEC,
+                PalettedContainer.Strategy.SECTION_STATES,
+                Blocks.AIR.defaultBlockState());
+        this.biomeCodec = PalettedContainer.codecRO(
+                biomeRegistry.asHolderIdMap(),
+                biomeRegistry.holderByNameCodec(),
+                PalettedContainer.Strategy.SECTION_BIOMES,
+                defaultBiome);
     }
 
 
