@@ -74,8 +74,8 @@ repositories {
     exclusiveContent {
         forRepository {
             maven {
-                name "caffeinemcRepository"
-                url "https://maven.caffeinemc.net/snapshots"
+                name = "caffeinemcRepository"
+                url = "https://maven.caffeinemc.net/snapshots"
             }
         }
         filter {
