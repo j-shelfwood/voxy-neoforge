@@ -30,8 +30,7 @@ import me.cortex.voxy.client.core.rendering.util.DownloadStream;
 import me.cortex.voxy.client.core.rendering.util.PrintfDebugUtil;
 import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.client.core.util.GPUTiming;
-// MC 1.21.1 NeoForge: Iris shader integration excluded
-// import me.cortex.voxy.client.core.util.IrisUtil;
+import me.cortex.voxy.client.core.util.IrisUtil;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.thread.ServiceManager;
 import me.cortex.voxy.common.world.WorldEngine;
@@ -262,8 +261,8 @@ public class VoxyRenderSystem {
         this.pipeline.preSetup(viewport);
 
         TimingStatistics.E.start();
-        // MC 1.21.1 NeoForge: Iris shader integration excluded - irisShadowActive() returns false (no Iris shadows)
-        if ((!VoxyClient.disableSodiumChunkRender())&&!false) {
+        // irisShadowActive() is guarded by IRIS_INSTALLED (false without Iris): skip chunk-bound render during the Iris shadow pass.
+        if ((!VoxyClient.disableSodiumChunkRender())&&!IrisUtil.irisShadowActive()) {
             this.chunkBoundRenderer.render(viewport);
         } else {
             viewport.depthBoundingBuffer.clear(0);
@@ -313,8 +312,7 @@ public class VoxyRenderSystem {
                 glBindSampler(i, 0);
             }
 
-            // MC 1.21.1 NeoForge: Iris shader integration excluded - clearIrisSamplers() is a no-op
-            // IrisUtil.clearIrisSamplers();//Thanks iris (sigh)
+            IrisUtil.clearIrisSamplers();//Thanks iris (sigh) — guarded by IRIS_INSTALLED, no-op without Iris
 
             //TODO: should/needto actually restore all of these, not just clear them
             //Clear all the bindings
