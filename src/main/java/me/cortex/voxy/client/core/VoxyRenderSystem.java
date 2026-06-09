@@ -223,6 +223,12 @@ public class VoxyRenderSystem {
         if (viewport == null) {
             return;
         }
+        // Matches upstream: the Iris shadow viewport is lazily created at 0x0 and only dimensioned for the
+        // main pass, so skip rendering an undimensioned viewport rather than building a 0x0 framebuffer
+        // (which fails GL framebuffer-completeness during ShadowRenderer.renderShadows).
+        if (viewport.width <= 0 || viewport.height <= 0) {
+            return;
+        }
 
         // MC 1.21.1 NeoForge: Fog is handled by VoxyClientEvents.onRenderFog()
         // which listens to ViewportEvent.RenderFog and pushes fog to infinity
