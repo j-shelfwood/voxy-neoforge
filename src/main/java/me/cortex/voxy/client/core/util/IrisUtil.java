@@ -4,7 +4,7 @@ import me.cortex.voxy.client.core.VoxyRenderSystem;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
 // Sodium 0.6.13: net.caffeinemc.mods.sodium.client.util.FogParameters no longer exists; fog plumbing removed from setupViewport
-import net.fabricmc.loader.api.FabricLoader;
+import net.neoforged.fml.ModList;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.api.v0.IrisApi;
 import net.irisshaders.iris.gl.IrisRenderSystem;
@@ -23,7 +23,11 @@ public class IrisUtil {
 
     public static CapturedViewportParameters CAPTURED_VIEWPORT_PARAMETERS;
 
-    public static final boolean IRIS_INSTALLED = FabricLoader.getInstance().isModLoaded("iris");
+    // Iris on NeoForge is a native NeoForge mod, so detect via NeoForge's ModList (not FFAPI's FabricLoader shim,
+    // which may not report native NeoForge mods). ModList is fully populated by the time this class is first loaded
+    // (at render time), matching the pattern already used in ViewportSelector. Mixin-bootstrap-time detection is
+    // handled separately by VoxyMixinPlugin via LoadingModList.
+    public static final boolean IRIS_INSTALLED = ModList.get() != null && ModList.get().isLoaded("iris");
     public static final boolean SHADER_SUPPORT = true;//System.getProperty("voxy.enableExperimentalIrisPipeline", "false").equalsIgnoreCase("true");
 
 
