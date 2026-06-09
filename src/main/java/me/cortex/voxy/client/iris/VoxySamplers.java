@@ -18,6 +18,7 @@ public class VoxySamplers {
             }
 
             //TODO replace ()->0 with the actual depth texture id
+            // Iris 1.8.1: GlSampler.MIPPED_NEAREST (was MIPPED_NEAREST_NEAREST in newer Iris); sampler arg is a plain GlSampler, not a Supplier
             samplers.addDynamicSampler(TextureType.TEXTURE_2D, () -> {
                 var pipeData = ((IGetIrisVoxyPipelineData)pipeline).voxy$getPipelineData();
                 if (pipeData == null) {
@@ -33,7 +34,7 @@ public class VoxySamplers {
                     return 0;
                 }
                 return dt.id;
-            }, ()->GlSampler.MIPPED_NEAREST_NEAREST, opaqueNames);
+            }, GlSampler.MIPPED_NEAREST, opaqueNames);
 
             samplers.addDynamicSampler(TextureType.TEXTURE_2D, () -> {
                 var pipeData = ((IGetIrisVoxyPipelineData)pipeline).voxy$getPipelineData();
@@ -49,7 +50,7 @@ public class VoxySamplers {
                     return 0;
                 }
                 return dt.id;
-            }, ()->GlSampler.MIPPED_NEAREST_NEAREST, translucentNames);
+            }, GlSampler.MIPPED_NEAREST, translucentNames);
         }
     }
 }

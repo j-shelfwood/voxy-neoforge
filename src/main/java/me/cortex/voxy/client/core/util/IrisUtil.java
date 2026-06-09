@@ -3,7 +3,7 @@ package me.cortex.voxy.client.core.util;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
 import me.cortex.voxy.client.core.rendering.Viewport;
 import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
-import net.caffeinemc.mods.sodium.client.util.FogParameters;
+// Sodium 0.6.13: net.caffeinemc.mods.sodium.client.util.FogParameters no longer exists; fog plumbing removed from setupViewport
 import net.fabricmc.loader.api.FabricLoader;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.api.v0.IrisApi;
@@ -14,9 +14,10 @@ import java.io.IOException;
 
 public class IrisUtil {
 
-    public record CapturedViewportParameters(ChunkRenderMatrices matrices, FogParameters parameters, double x, double y, double z) {
+    // Sodium 0.6.13: setupViewport no longer takes FogParameters (removed from sodium.client.util)
+    public record CapturedViewportParameters(ChunkRenderMatrices matrices, double x, double y, double z) {
         public Viewport<?> apply(VoxyRenderSystem vrs) {
-            return vrs.setupViewport(this.matrices, this.parameters, this.x, this.y, this.z);
+            return vrs.setupViewport(this.matrices, this.x, this.y, this.z);
         }
     }
 

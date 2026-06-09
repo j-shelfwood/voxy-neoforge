@@ -3,7 +3,7 @@ package me.cortex.voxy.client.mixin.iris;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
-import net.caffeinemc.mods.sodium.client.util.FogStorage;
+// Sodium 0.6.13: net.caffeinemc.mods.sodium.client.util.FogStorage no longer exists; fog capture removed
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
@@ -42,9 +42,10 @@ public class MixinLevelRenderer {
                 //Fixthe fucking viewport dims, fuck iris
                 glViewport(0,0,Minecraft.getInstance().getMainRenderTarget().width, Minecraft.getInstance().getMainRenderTarget().height);
 
-                var pos = camera.position();
+                var pos = camera.getPosition(); // MC 1.21.1: Camera.getPosition() (was position() in newer MC)
                 // frustumMatrix is the modelView matrix in 1.21.1 (was positionMatrix in the newer-MC signature)
-                IrisUtil.CAPTURED_VIEWPORT_PARAMETERS = new IrisUtil.CapturedViewportParameters(new ChunkRenderMatrices(projectionMatrix, frustumMatrix), ((FogStorage) this.minecraft.gameRenderer).sodium$getFogParameters(), pos.x, pos.y, pos.z);
+                // Sodium 0.6.13: FogParameters/FogStorage removed; setupViewport no longer captures fog
+                IrisUtil.CAPTURED_VIEWPORT_PARAMETERS = new IrisUtil.CapturedViewportParameters(new ChunkRenderMatrices(projectionMatrix, frustumMatrix), pos.x, pos.y, pos.z);
             }
         }
     }

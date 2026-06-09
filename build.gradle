@@ -17,12 +17,6 @@ base {
 sourceSets {
     main {
         java {
-            // Iris shader integration
-            exclude 'me/cortex/voxy/client/iris/**'
-            exclude 'me/cortex/voxy/client/core/IrisVoxyRenderPipeline.java'
-            exclude 'me/cortex/voxy/client/core/util/IrisUtil.java'
-            exclude 'me/cortex/voxy/client/mixin/iris/**'
-
             // Sodium config API (changed in Sodium 0.6.x)
             exclude 'me/cortex/voxy/client/config/SodiumConfigBuilder.java'
             exclude 'me/cortex/voxy/client/config/VoxyConfigMenu.java'
