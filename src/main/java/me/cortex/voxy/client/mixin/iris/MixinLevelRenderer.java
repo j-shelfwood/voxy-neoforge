@@ -1,7 +1,5 @@
 package me.cortex.voxy.client.mixin.iris;
 
-import com.mojang.blaze3d.buffers.GpuBufferSlice;
-import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.util.IrisUtil;
 import net.caffeinemc.mods.sodium.client.render.chunk.ChunkRenderMatrices;
@@ -9,9 +7,10 @@ import net.caffeinemc.mods.sodium.client.util.FogStorage;
 import net.minecraft.client.Camera;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.LevelRenderer;
 import org.joml.Matrix4f;
-import org.joml.Vector4f;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -25,18 +24,17 @@ import static org.lwjgl.opengl.GL11C.glViewport;
 public class MixinLevelRenderer {
     @Shadow @Final private Minecraft minecraft;
 
+    // MC 1.21.1 mojmap verified: LevelRenderer.renderLevel(DeltaTracker, boolean, Camera, GameRenderer, LightTexture, Matrix4f frustumMatrix, Matrix4f projectionMatrix).
+    // Upstream targets newer MC (GraphicsResourceAllocator/GpuBufferSlice/basicProjectionMatrix signature); rewritten to the 1.21.1 params so the HEAD inject applies.
     @Inject(method = "renderLevel", at = @At("HEAD"), order = 100)
     private void voxy$injectIrisCompat(
-            GraphicsResourceAllocator allocator,
             DeltaTracker tickCounter,
             boolean renderBlockOutline,
             Camera camera,
-            Matrix4f positionMatrix,
+            GameRenderer gameRenderer,
+            LightTexture lightTexture,
+            Matrix4f frustumMatrix,
             Matrix4f projectionMatrix,
-            Matrix4f basicProjectionMatrix,
-            GpuBufferSlice fogBuffer,
-            Vector4f fogColor,
-            boolean renderSky,
             CallbackInfo ci) {
         if (IrisUtil.irisShaderPackEnabled()) {
             var renderer = ((IGetVoxyRenderSystem) this).getVoxyRenderSystem();
@@ -45,7 +43,8 @@ public class MixinLevelRenderer {
                 glViewport(0,0,Minecraft.getInstance().getMainRenderTarget().width, Minecraft.getInstance().getMainRenderTarget().height);
 
                 var pos = camera.position();
-                IrisUtil.CAPTURED_VIEWPORT_PARAMETERS = new IrisUtil.CapturedViewportParameters(new ChunkRenderMatrices(projectionMatrix, positionMatrix), ((FogStorage) this.minecraft.gameRenderer).sodium$getFogParameters(), pos.x, pos.y, pos.z);
+                // frustumMatrix is the modelView matrix in 1.21.1 (was positionMatrix in the newer-MC signature)
+                IrisUtil.CAPTURED_VIEWPORT_PARAMETERS = new IrisUtil.CapturedViewportParameters(new ChunkRenderMatrices(projectionMatrix, frustumMatrix), ((FogStorage) this.minecraft.gameRenderer).sodium$getFogParameters(), pos.x, pos.y, pos.z);
             }
         }
     }
