@@ -45,10 +45,11 @@ You might wonder: "Why not just use the Fabric version with [Sinytra Connector](
 - Fog integration (disabled at LOD boundaries)
 - Block model baking for all render types (solid, cutout, cutout_mipped, translucent)
 - Delayed chunk unloading to prevent pop-out effects
+- Iris shader integration (LOD terrain rendered under shaderpacks), targeting Iris 1.8.1 for 1.21.1
 
 ### Current Limitations
 - Requires Sodium 0.6.13+ (NeoForge version)
-- Some optional integrations not yet ported (Iris, Nvidium, Vivecraft)
+- Some optional integrations not yet ported (Nvidium, Vivecraft)
 - Debug screen integration disabled (MC 1.21.1 API changes)
 
 ## Requirements
