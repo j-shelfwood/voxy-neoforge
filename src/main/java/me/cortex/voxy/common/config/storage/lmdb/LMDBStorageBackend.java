@@ -31,7 +31,7 @@ public class LMDBStorageBackend extends StorageBackend {
     public LMDBStorageBackend(String file) {
         this.dbi = new LMDBInterface.Builder()
                 .setMaxDbs(2)
-                .open(file, MDB_NOSUBDIR)//MDB_NOLOCK (IF I DO THIS, must sync the db manually)// TODO: THIS
+                .open(file, 0)//MDB_NOLOCK (IF I DO THIS, must sync the db manually)// TODO: THIS
                 .fetch();
         this.dbi.setMapSize(GROW_SIZE);
         this.sectionDatabase = this.dbi.createDb("world_sections");
@@ -86,7 +86,7 @@ public class LMDBStorageBackend extends StorageBackend {
     }
 
     @Override
-    public void iterateStoredSectionPositions(LongConsumer consumer) {
+    public void iteratePositions(int level, LongConsumer consumer) {
         throw new IllegalStateException("Not yet implemented");
     }
 

@@ -43,6 +43,8 @@ public class RenderDistanceTracker {
             this.posZ = z;
             this.tracker.moveCenter(((int)x)>>9, ((int)z)>>9);
         }
+
+        //TODO: make process rate in terms of updatesPerSecond not updates per frame
         return this.tracker.process(this.processRate, this::add, this::rem)!=0;
     }
 

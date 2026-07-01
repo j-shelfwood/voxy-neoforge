@@ -46,9 +46,8 @@ public class MultiThreadPrioritySemaphore {
                 }
             }*/
 
-            //Absolutly no idea if this shitty thing functions correctly... at all, it very much probably doesnt
-            while (true) {
-                if (runJob) {
+            if (runJob) {
+                while (true) {
                     this.blockSemaphore.acquireUninterruptibly();//Block on all
                     if (this.localSemaphore.tryAcquire()) {//We prioritize locals first
                         return;
@@ -56,13 +55,10 @@ public class MultiThreadPrioritySemaphore {
                     if (this.man.tryRun(this)) {//Returns true if it captured a local job
                         break;
                     }
-                } else {
-                    this.localSemaphore.acquireUninterruptibly();
-                    if (!this.blockSemaphore.tryAcquire()) {
-                        //This is technicanlly/actually a failure state cause blockSemaphore could have more
-                    }
-                    break;
                 }
+            } else {
+                this.localSemaphore.acquireUninterruptibly();//We acquire local first
+                this.blockSemaphore.tryAcquire();//Try acquire a block, if not its... "fine"
             }
         }
 

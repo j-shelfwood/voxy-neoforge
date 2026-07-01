@@ -17,7 +17,7 @@ public class ClientImportManager extends ImportManager {
         protected ClientImportTask(IDataImporter importer) {
             super(importer);
 
-            this.bossbarUUID = Mth.createInsecureUUID();
+            this.bossbarUUID = UUID.randomUUID();
             this.bossBar = new LerpingBossEvent(this.bossbarUUID, Component.nullToEmpty("Voxy world importer"), 0.0f, BossEvent.BossBarColor.GREEN, BossEvent.BossBarOverlay.PROGRESS, false, false, false);
             Minecraft.getInstance().execute(()->{
                 Minecraft.getInstance().gui.getBossOverlay().events.put(bossBar.getId(), bossBar);

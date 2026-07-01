@@ -7,14 +7,15 @@ import me.cortex.voxy.common.util.ByteBufferBackedInputStream;
 import me.cortex.voxy.common.util.Pair;
 import me.cortex.voxy.common.voxelization.VoxelizedSection;
 import me.cortex.voxy.common.voxelization.WorldConversionFactory;
+import me.cortex.voxy.common.voxelization.WorldVoxilizedSectionMipper;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.common.world.WorldUpdater;
 import me.cortex.voxy.common.world.other.Mapper;
+import me.cortex.voxy.commonImpl.importers.IDataImporter.ICompletionCallback;
+import me.cortex.voxy.commonImpl.importers.IDataImporter.IUpdateCallback;
 import net.minecraft.core.Holder;
-import net.minecraft.core.HolderLookup;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.Registries;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.Biome;
@@ -54,10 +55,9 @@ public class DHImporter implements IDataImporter {
     private final Level world;
     private final int bottomOfWorld;
     private final int worldHeightSections;
-    // MC 1.21.1: Registry → HolderLookup.RegistryLookup, Holder.Reference → Holder
-    private final Holder<Biome> defaultBiome;
-    private final HolderLookup.RegistryLookup<Biome> biomeRegistry;
-    private final HolderLookup.RegistryLookup<Block> blockRegistry;
+    private final Holder.Reference<Biome> defaultBiome;
+    private final Registry<Biome> biomeRegistry;
+    private final Registry<Block> blockRegistry;
     private Thread runner;
     private volatile boolean isRunning = false;
     private final AtomicInteger processedChunks = new AtomicInteger();
@@ -102,11 +102,10 @@ public class DHImporter implements IDataImporter {
     public DHImporter(File file, WorldEngine worldEngine, Level mcWorld, ServiceManager servicePool, BooleanSupplier rateLimiter) {
         this.engine = worldEngine;
         this.world = mcWorld;
-        this.biomeRegistry = mcWorld.registryAccess().lookupOrThrow(Registries.BIOME);
-        this.defaultBiome = this.biomeRegistry.getOrThrow(Biomes.PLAINS);
-        this.blockRegistry = mcWorld.registryAccess().lookupOrThrow(Registries.BLOCK);
+        this.biomeRegistry = mcWorld.registryAccess().registryOrThrow(Registries.BIOME);
+        this.defaultBiome = this.biomeRegistry.getHolder(Biomes.PLAINS).orElseThrow();
+        this.blockRegistry = mcWorld.registryAccess().registryOrThrow(Registries.BLOCK);
 
-        // MC 1.21.1: Level.getMinY() → getMinBuildHeight()
         this.bottomOfWorld = mcWorld.getMinBuildHeight();
         int worldHeight = mcWorld.getHeight();
         this.worldHeightSections = (worldHeight+15)/16;
@@ -231,10 +230,7 @@ public class DHImporter implements IDataImporter {
                 throw new IllegalStateException();
             {
                 var biomeRes = ResourceLocation.parse(encEntry.substring(0, idx));
-                // MC 1.21.1: RegistryLookup.get() requires ResourceKey, returns Optional<Holder.Reference<T>>
-                // Explicit type needed because orElse() with Holder<Biome> default causes type mismatch
-                var biomeKey = ResourceKey.create(Registries.BIOME, biomeRes);
-                Holder<Biome> biome = this.biomeRegistry.get(biomeKey).map(h -> (Holder<Biome>)h).orElse(this.defaultBiome);
+                var biome = this.biomeRegistry.getHolder(biomeRes).orElse(this.defaultBiome);
                 biomeId = this.engine.getMapper().getIdForBiome(biome);
             }
             {
@@ -248,12 +244,10 @@ public class DHImporter implements IDataImporter {
                         bStateStr = encEntry.substring(sIdx + STATE_STRING_SEPARATOR.length());
                     }
                     var bId = ResourceLocation.parse(encEntry.substring(b, sIdx != -1 ? sIdx : encEntry.length()));
-                    // MC 1.21.1: RegistryLookup.get() requires ResourceKey, returns Optional<Holder<T>>
-                    var blockKey = ResourceKey.create(Registries.BLOCK, bId);
-                    var maybeBlock = this.blockRegistry.get(blockKey);
+                    var maybeBlock = this.blockRegistry.getOptional(bId);
                     Block block = Blocks.AIR;
                     if (maybeBlock.isPresent()) {
-                        block = maybeBlock.get().value();
+                        block = maybeBlock.get();
                     }
                     var state = block.defaultBlockState();
                     if (bStateStr != null && block != Blocks.AIR) {
@@ -389,7 +383,7 @@ public class DHImporter implements IDataImporter {
                             section.lvl0NonAirCount = nonAirCount;
                         }
 
-                        WorldConversionFactory.mipSection(section, this.engine.getMapper());
+                        WorldVoxilizedSectionMipper.mipSection(section, this.engine.getMapper());
 
                         section.setPosition(X*4+(x>>4), sy+(this.bottomOfWorld>>4), (Z*4)+sz);
                         WorldUpdater.insertUpdate(this.engine, section);
@@ -472,7 +466,7 @@ public class DHImporter implements IDataImporter {
             hasJDBC = true;
         } catch (ClassNotFoundException | NoClassDefFoundError e) {
             //throw new RuntimeException(e);
-            Logger.warn("Unable to load sqlite JDBC or lzma decompressor, DHImporting wont be available", e);
+            Logger.warn("Unable to load sqlite JDBC or lzma decompressor, DHImporting wont be available");
         }
         HasRequiredLibraries = hasJDBC;
     }

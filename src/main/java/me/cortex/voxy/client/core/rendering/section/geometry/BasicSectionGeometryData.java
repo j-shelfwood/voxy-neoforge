@@ -14,11 +14,24 @@ public class BasicSectionGeometryData implements IGeometryData {
     public static final int SECTION_METADATA_SIZE = 32;
     private final GlBuffer sectionMetadataBuffer;
     private final GlBuffer geometryBuffer;
+    public final boolean isExternalGeometryBuffer;
 
     private final int maxSectionCount;
     private int currentSectionCount;
 
+    public BasicSectionGeometryData(int maxSectionCount, GlBuffer geometryBuffer) {
+        this.maxSectionCount = maxSectionCount;
+        this.sectionMetadataBuffer = new GlBuffer((long) maxSectionCount * SECTION_METADATA_SIZE);
+        //8 Cause a quad is 8 bytes
+        if ((geometryBuffer.size()%8)!=0) {
+            throw new IllegalStateException();
+        }
+        this.geometryBuffer = geometryBuffer;
+        this.isExternalGeometryBuffer = true;
+    }
+
     public BasicSectionGeometryData(int maxSectionCount, long geometryCapacity) {
+        this.isExternalGeometryBuffer = false;
         this.maxSectionCount = maxSectionCount;
         this.sectionMetadataBuffer = new GlBuffer((long) maxSectionCount * SECTION_METADATA_SIZE);
         //8 Cause a quad is 8 bytes
@@ -34,7 +47,7 @@ public class BasicSectionGeometryData implements IGeometryData {
         Logger.info("if your game crashes/exits here without any other log message, try manually decreasing the geometry capacity");
         glGetError();//Clear any errors
         GlBuffer buffer = null;
-        if (!(Capabilities.INSTANCE.isNvidia&&Capabilities.INSTANCE.sparseBuffer)) {//This hack makes it so it doesnt crash on renderdoc
+        if (!(Capabilities.INSTANCE.isNvidia&&ThreadUtils.isWindows&&Capabilities.INSTANCE.sparseBuffer)) {//This hack makes it so it doesnt crash on renderdoc
             buffer = new GlBuffer(geometryCapacity, false);//Only do this if we are not on nvidia
             //TODO: FIXME: TEST, see if the issue is that we are trying to zero the entire buffer, try only zeroing increments
             // or dont zero it at all
@@ -74,6 +87,7 @@ public class BasicSectionGeometryData implements IGeometryData {
                 size += 65536L*1024;//increase size by 64mb to prevent driver allocation thrashing
                 glBufferPageCommitmentARB(GL_ARRAY_BUFFER, this.sparseCommitment, size-this.sparseCommitment, true);
                 glBindBuffer(GL_ARRAY_BUFFER, 0);
+                //Logger.info("Resizing sparse: " + this.sparseCommitment + ", " + (size-this.sparseCommitment));
                 this.sparseCommitment = size;
             }
         }
@@ -87,6 +101,7 @@ public class BasicSectionGeometryData implements IGeometryData {
         return this.sectionMetadataBuffer;
     }
 
+    @Override
     public int getSectionCount() {
         return this.currentSectionCount;
     }
@@ -119,27 +134,35 @@ public class BasicSectionGeometryData implements IGeometryData {
         }
 
         glFinish();
-        this.geometryBuffer.free();
-        glFinish();
-        if (Capabilities.INSTANCE.canQueryGpuMemory) {
-            long releaseSize = (long) (this.geometryBuffer.size()*0.75);//if gpu memory usage drops by 75% of the expected value assume we freed it
-            if (this.geometryBuffer.isSparse()) {//If we are using sparse buffers, use the commited size instead
-                releaseSize = (long)(this.sparseCommitment*0.75);
-            }
-            if (Capabilities.INSTANCE.getFreeDedicatedGpuMemory()-gpuMemory<=releaseSize) {
-                Logger.info("Attempting to wait for gpu memory to release");
-                long start = System.currentTimeMillis();
 
-                long TIMEOUT = 2500;
-
-                while (System.currentTimeMillis() - start > TIMEOUT) {//Wait up to 2.5 seconds for memory to release
-                    glFinish();
-                    if (Capabilities.INSTANCE.getFreeDedicatedGpuMemory() - gpuMemory > releaseSize) break;
+        if (!this.isExternalGeometryBuffer) {
+            this.geometryBuffer.free();
+            glFinish();
+            if (Capabilities.INSTANCE.canQueryGpuMemory) {
+                long releaseSize = (long) (this.geometryBuffer.size() * 0.75);//if gpu memory usage drops by 75% of the expected value assume we freed it
+                if (this.geometryBuffer.isSparse()) {//If we are using sparse buffers, use the commited size instead
+                    releaseSize = (long) (this.sparseCommitment * 0.75);
                 }
                 if (Capabilities.INSTANCE.getFreeDedicatedGpuMemory() - gpuMemory <= releaseSize) {
-                    Logger.warn("Failed to wait for gpu memory to be freed, this could indicate an issue with the driver");
+                    Logger.info("Attempting to wait for gpu memory to release");
+                    long start = System.currentTimeMillis();
+
+                    long TIMEOUT = 400;
+
+                    while (System.currentTimeMillis() - start < TIMEOUT) {//Wait up to 2.5 seconds for memory to release
+                        glFinish();
+                        if (Capabilities.INSTANCE.getFreeDedicatedGpuMemory() - gpuMemory > releaseSize) break;
+                    }
+                    if (Capabilities.INSTANCE.getFreeDedicatedGpuMemory() - gpuMemory <= releaseSize) {
+                        Logger.warn("Failed to wait for gpu memory to be freed, this could indicate an issue with the driver");
+                    }
                 }
             }
         }
+    }
+
+    @Override
+    public long getMaxCapacity() {
+        return this.geometryBuffer.size();
     }
 }

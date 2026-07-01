@@ -28,16 +28,16 @@ side="BOTH"
 [[dependencies.voxy]]
 modId="sodium"
 type="required"
-versionRange="[0.6.13,)"
+# Voxy's required sodium.* mixins target Sodium 0.8.x internals (the build compiles against
+# 0.8.12-beta.2); a 0.6/0.7 floor would pass this gate then crash on mixin apply.
+versionRange="[0.8,)"
 ordering="AFTER"
 side="CLIENT"
 
-[[dependencies.voxy]]
-modId="fabric_api"
-type="required"
-versionRange="[0.102.0,)"
-ordering="BEFORE"
-side="BOTH"
+# NOTE: the fabric_api required-dependency was removed. This pack's Forgified Fabric API does
+# not register a mod under the literal modId "fabric_api", so FML rejected voxy at load with
+# "requires fabric_api 0.102.0 or above ... not installed". FFAPI's classes are on the runtime
+# classpath regardless, so the metadata gate is unnecessary (and wrong for this FFAPI build).
 
 [[mixins]]
 config="client.voxy.mixins.json"

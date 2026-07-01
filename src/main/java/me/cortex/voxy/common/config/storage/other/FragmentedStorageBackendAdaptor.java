@@ -33,9 +33,9 @@ public class FragmentedStorageBackendAdaptor extends StorageBackend {
     }
 
     @Override
-    public void iterateStoredSectionPositions(LongConsumer consumer) {
+    public void iteratePositions(int level, LongConsumer consumer) {
         for (var backend : this.backends) {
-            backend.iterateStoredSectionPositions(consumer);
+            backend.iteratePositions(level, consumer);
         }
     }
 

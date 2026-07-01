@@ -108,8 +108,8 @@ public class BasicAsyncGeometryManager implements IGeometryManager {
     private SectionMeta createMeta(BuiltSection section) {
         if ((section.geometryBuffer.size%GEOMETRY_ELEMENT_SIZE)!=0) throw new IllegalStateException();
         int size = (int) (section.geometryBuffer.size/GEOMETRY_ELEMENT_SIZE);
-        //clamp size upwards
-        int upsized = (size+1023)&~1023;
+        //clamp size upwards to ranges of 127
+        int upsized = (size+127)&~127;
         //Address
         int addr = (int)this.allocationHeap.alloc(upsized);
         if (addr == -1) {

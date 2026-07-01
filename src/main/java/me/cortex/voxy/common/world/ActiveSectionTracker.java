@@ -204,14 +204,18 @@ public class ActiveSectionTracker {
         }
     }
 
-    void tryUnload(WorldSection section) {
+    void tryUnload(WorldSection section, int hints) {
         if (this.engine != null) this.engine.lastActiveTime = System.currentTimeMillis();
-        if (section.isDirty&&this.engine!=null) {
+        if (section.shouldSave()&&this.engine!=null) {
             if (section.tryAcquire()) {
-                if (section.setNotDirty()) {//If the section is dirty we must enqueue for saving
-                    this.engine.saveSection(section);
+                if (section.shouldSave()) {//If we should try enqueue
+                    if (!this.engine.saveSection(section, true, true)) {
+                        //we didnt enqueue the section in the save queue so we must unload it manually
+                        section.release(false, hints);
+                    }
+                } else {
+                    section.release(false, hints);//Special release
                 }
-                section.release(false);//Special
             }
         }
 
@@ -223,19 +227,43 @@ public class ActiveSectionTracker {
         WorldSection sec = null;
         final var lock = this.locks[index];
         long stamp = lock.writeLock();
+        boolean shouldRetryExit = false;
         {
             VarHandle.loadLoadFence();
-            if (section.isDirty) {
+            if (this.engine != null && section.shouldSave()) {//Last call for saving
                 if (section.tryAcquire()) {
-                    if (section.setNotDirty()) {//If the section is dirty we must enqueue for saving
-                        if (this.engine != null)
-                            this.engine.saveSection(section);
+                    if (!this.engine.saveSection(section, true, true)) {//not allowed to block as we are in a lock
+                        //We didnt enqueue the save here, so we must unload
+                        // but unload in a recursive
+                        VarHandle.fullFence();
+                        shouldRetryExit |= section.getRefCount()!=1;//if we arnt the only ref
+                        VarHandle.fullFence();
+                        shouldRetryExit |= section.isDirty;//or if the section is now dirty, note this must go AFTER the ref check, since you can only mark live sections as dirty
+                        section.release(false, hints);//Special
                     }
-                    section.release(false);//Special
+
+
+                    //NOTE: think have since fixed this issue
+                    //In theory there can be a race condition here, where if this thread is paused
+                    // the save queue fully finishes, the state is dirty == false inSaveQueue == false
+                    // but the acquire count is at least 1
+                    //if another thread marks this chunk as dirty (it would have acquired it after the inital `section.getRefCount() != 0`
+                    // return check) and releases it, since the acquire count is still 1 (acquired here)
+                    // then it doesnt trigger a save attempt but the dirty flag is set
+                    //then this code continues and it causes badness cause its now in an invalid state
                 } else {
                     throw new IllegalStateException("Section was dirty but is also unloaded, this is very bad");
                 }
             }
+
+            //This is a painful case, we need to abort here if there was a funky thing that happened
+            if (shouldRetryExit) {
+                lock.unlockWrite(stamp);
+                //retry
+                this.tryUnload(section, hints);
+                return;
+            }
+
             if (section.getRefCount() == 0 && section.trySetFreed()) {
                 var cached = cache.remove(section.key);
                 var obj = cached.obj;

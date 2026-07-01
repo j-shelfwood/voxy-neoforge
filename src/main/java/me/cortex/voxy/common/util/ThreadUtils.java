@@ -1,5 +1,6 @@
 package me.cortex.voxy.common.util;
 
+import me.cortex.voxy.common.Logger;
 import org.lwjgl.system.*;
 import org.lwjgl.system.windows.Kernel32;
 
@@ -10,6 +11,7 @@ public class ThreadUtils {
     public static final int WIN32_THREAD_MODE_BACKGROUND_BEGIN = 0x00010000;
     public static final int WIN32_THREAD_MODE_BACKGROUND_END = 0x00020000;
     public static final boolean isWindows = Platform.get() == Platform.WINDOWS;
+    public static final boolean isLinux = Platform.get() == Platform.LINUX;
     private static final long SetThreadPriority;
     private static final long SetThreadSelectedCpuSetMasks;
     private static final long schedSetaffinity;
@@ -23,8 +25,14 @@ public class ThreadUtils {
         }
 
         if (Platform.get() == Platform.LINUX) {
-            var libc = APIUtil.apiCreateLibrary("libc.so.6");
-            schedSetaffinity = APIUtil.apiGetFunctionAddress(libc, "sched_setaffinity");
+            long fn = 0;
+            try {
+                var libc = APIUtil.apiCreateLibrary("libc.so.6");
+                fn = APIUtil.apiGetFunctionAddress(libc, "sched_setaffinity");
+            } catch (Exception e) {
+                Logger.error(e);
+            }
+            schedSetaffinity = fn;
         } else {
             schedSetaffinity = 0;
         }

@@ -7,20 +7,15 @@ import net.neoforged.fml.ModList;
 import net.neoforged.fml.loading.FMLLoader;
 import net.neoforged.fml.loading.LoadingModList;
 
-/**
- * Common initialization for Voxy on NeoForge.
- *
- * IMPORTANT: This class may be loaded very early via mixin class loading,
- * before NeoForge's ModList is populated. We must use LoadingModList or
- * FMLLoader APIs that are available during early bootstrap.
- */
+//NeoForge's VoxyCommon. Can get loaded via mixin classloading before ModList is ready,
+//so we use LoadingModList/FMLLoader APIs that work durring early bootstrap.
 public class VoxyCommon {
     public static final String MOD_VERSION;
     public static final boolean IS_DEDICATED_SERVER;
     public static final boolean IS_IN_MINECRAFT;
 
     static {
-        // Use LoadingModList for early access - ModList.get() may be null during mixin loading
+        //Use LoadingModList - ModList.get() can be null durring mixin loading
         var modFile = LoadingModList.get() != null ? LoadingModList.get().getModFileById("voxy") : null;
         if (modFile == null) {
             IS_IN_MINECRAFT = false;
@@ -29,7 +24,7 @@ public class VoxyCommon {
             IS_DEDICATED_SERVER = false;
         } else {
             IS_IN_MINECRAFT = true;
-            // Get version from LoadingModList (available early)
+            //version from LoadingModList (availbe early)
             var version = modFile.getMods().stream()
                     .filter(m -> m.getModId().equals("voxy"))
                     .findFirst()

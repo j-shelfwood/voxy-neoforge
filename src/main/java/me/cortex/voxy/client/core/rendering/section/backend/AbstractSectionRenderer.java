@@ -2,6 +2,7 @@ package me.cortex.voxy.client.core.rendering.section.backend;
 
 
 import me.cortex.voxy.client.core.AbstractRenderPipeline;
+import me.cortex.voxy.client.core.RenderProperties;
 import me.cortex.voxy.client.core.gl.shader.Shader;
 import me.cortex.voxy.client.core.gl.shader.ShaderType;
 import me.cortex.voxy.client.core.model.ModelStore;
@@ -52,7 +53,9 @@ public abstract class AbstractSectionRenderer <T extends Viewport<T>, J extends 
 
     protected final J geometryManager;
     protected final ModelStore modelStore;
-    protected AbstractSectionRenderer(ModelStore modelStore, J geometryManager) {
+    protected final RenderProperties properties;
+    protected AbstractSectionRenderer(RenderProperties properties, ModelStore modelStore, J geometryManager) {
+        this.properties = properties;
         this.geometryManager = geometryManager;
         this.modelStore = modelStore;
     }
@@ -60,6 +63,7 @@ public abstract class AbstractSectionRenderer <T extends Viewport<T>, J extends 
     public abstract void renderOpaque(T viewport);
     public abstract void buildDrawCalls(T viewport);
     public abstract void renderTemporal(T viewport);
+    public void postOpaquePreperation(T viewport){}//can be used for next frame culling
     public abstract void renderTranslucent(T viewport);
     public abstract T createViewport();
     public abstract void free();

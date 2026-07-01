@@ -1,107 +1,75 @@
 package me.cortex.voxy.client.core.gl.shader;
 
 
-import net.caffeinemc.mods.sodium.client.gl.shader.ShaderConstants;
-import net.caffeinemc.mods.sodium.client.gl.shader.ShaderParser;
+import net.minecraft.client.Minecraft;
+import net.minecraft.resources.ResourceLocation;
+
 import org.apache.commons.io.IOUtils;
 
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
-import java.util.regex.Matcher;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.regex.Pattern;
 
-/**
- * NeoForge-compatible shader loader for Voxy.
- *
- * On Fabric, Sodium's ShaderLoader.getShaderSource() uses a flat classloader that can
- * access all mod resources. On NeoForge, each mod has an isolated classloader, so
- * Sodium's classloader cannot access Voxy's shader resources.
- *
- * This loader bypasses Sodium's resource loading and uses Voxy's own classloader.
- *
- * Upstream reference: https://github.com/MCRcortex/voxy
- * See: src/main/java/me/cortex/voxy/client/core/gl/shader/ShaderLoader.java
- */
 public class ShaderLoader {
-    private static final Pattern IMPORT_PATTERN = Pattern.compile("#import <(?<namespace>.*):(?<path>.*)>");
-
-    /**
-     * Parse and load a shader, matching upstream Voxy behavior.
-     *
-     * Upstream code:
-     *   return "#version 460 core\n" + ShaderParser.parseShader(
-     *       "\n#import <" + id + ">\n//beans", ShaderConstants.builder().build()
-     *   ).src().replaceAll("\r\n", "\n").replaceFirst("\n#version .+\n", "\n");
-     *
-     * The key is the leading "\n" before #import - this ensures the regex
-     * "\n#version .+\n" can match the #version directive in the loaded shader.
-     */
     public static String parse(String id) {
-        // Load shader source using Voxy's classloader (NeoForge classloader isolation fix)
-        String shaderSource = getShaderSource(id);
-
-        // Process any nested #import directives recursively
-        shaderSource = processImports(shaderSource);
-
-        // Match upstream format: "\n" + content + "\n//beans"
-        // The leading \n is critical for the regex to work
-        String processed = "\n" + shaderSource + "\n//beans";
-
-        // Apply Sodium's shader constants processing (handles #define etc.)
-        processed = ShaderParser.parseShader(processed, ShaderConstants.builder().build());
-
-        // Normalize line endings and strip original #version (upstream behavior)
-        processed = processed.replaceAll("\r\n", "\n");
-        processed = processed.replaceFirst("\n#version .+\n", "\n");
-
-        // Prepend our target GLSL version
-        return "#version 460 core\n" + processed;
+        var src =  "#version 460 core\n";
+        src += String.join("\n", ShaderLoadingParser.parseRoot(ResourceLocation.parse(id)));
+        return src;
     }
 
-    /**
-     * Load shader source using Voxy's classloader.
-     * Path format: "namespace:path" -> "/assets/{namespace}/shaders/{path}"
-     */
-    private static String getShaderSource(String id) {
-        String[] parts = id.split(":", 2);
-        String namespace = parts.length > 1 ? parts[0] : "voxy";
-        String path = parts.length > 1 ? parts[1] : parts[0];
 
-        String resourcePath = String.format("/assets/%s/shaders/%s", namespace, path);
+    //Use our own loader
 
-        try (InputStream in = ShaderLoader.class.getResourceAsStream(resourcePath)) {
-            if (in == null) {
-                throw new RuntimeException("Shader not found: " + resourcePath + " (id=" + id + ")");
-            }
-            return IOUtils.toString(in, StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to read shader source: " + resourcePath, e);
-        }
-    }
-
-    /**
-     * Process #import directives recursively, loading from Voxy's resources.
-     */
-    private static String processImports(String source) {
-        StringBuilder result = new StringBuilder();
-        for (String line : source.split("\n")) {
-            if (line.trim().startsWith("#import")) {
-                Matcher matcher = IMPORT_PATTERN.matcher(line.trim());
-                if (matcher.matches()) {
-                    String namespace = matcher.group("namespace");
-                    String path = matcher.group("path");
-                    String importId = namespace + ":" + path;
-                    String importedSource = getShaderSource(importId);
-                    result.append(processImports(importedSource));
+    private static final class ShaderLoadingParser {
+        private static final Pattern IMPORT_PATTERN = Pattern.compile("#import <(?<namespace>.*):(?<path>.*)>");
+        public static List<String> parseRoot(ResourceLocation id) {
+            List<String> out = new ArrayList<>();
+            for (var line : toLines(loadShaderAsset(id))) {
+                if (line.startsWith("#version")) {
+                    continue;
+                } else if (line.startsWith("#import")) {
+                    var match = IMPORT_PATTERN.matcher(line);
+                    if (!match.matches()) throw new IllegalArgumentException("Unknown import: " + line);
+                    var iid = ResourceLocation.fromNamespaceAndPath(match.group("namespace"), match.group("path"));
+                    out.addAll(parseRoot(iid));
                 } else {
-                    result.append(line);
+                    out.add(line);
                 }
-            } else {
-                result.append(line);
             }
-            result.append("\n");
+            return out;
         }
-        return result.toString();
+
+        private static List<String> toLines(String src) {
+            return new BufferedReader(new StringReader(src)).lines().toList();
+        }
+        private static String loadShaderAsset(ResourceLocation id) {
+            String path = String.format("/assets/%s/shaders/%s", id.getNamespace(), id.getPath());
+            //Voxy's own shaders load via this classloader. Cross-mod #imports (e.g. sodium includes)
+            //live in another NeoForge module this classloader cant see, so fall back to the resource
+            //manager which aggregates all mod assets. Fabric's flat classpath found both; NeoForge modules dont.
+            try (InputStream in = ShaderLoadingParser.class.getResourceAsStream(path)) {
+                if (in != null) {
+                    return IOUtils.toString(in, StandardCharsets.UTF_8);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to read shader source for " + path, e);
+            }
+            var rl = ResourceLocation.fromNamespaceAndPath(id.getNamespace(), "shaders/" + id.getPath());
+            var resource = Minecraft.getInstance().getResourceManager().getResource(rl);
+            if (resource.isEmpty()) {
+                throw new RuntimeException("Shader not found (classloader + resource manager): " + path);
+            }
+            try (InputStream in = resource.get().open()) {
+                return IOUtils.toString(in, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to read shader source for " + path, e);
+            }
+        }
     }
 }

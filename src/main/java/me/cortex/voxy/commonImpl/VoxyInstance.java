@@ -145,6 +145,7 @@ public abstract class VoxyInstance {
 
         if (!this.isRunning) {
             Logger.error("Tried getting world object on voxy instance but its not running");
+            this.activeWorldLock.unlockWrite(stamp);
             return null;
         }
 
@@ -239,12 +240,14 @@ public abstract class VoxyInstance {
 
         if (!this.activeWorlds.isEmpty()) {
             boolean printedNotice = false;
-            for (var world : this.activeWorlds.values()) {
+            for (var world : new ArrayList<>(this.activeWorlds.values())) {
                 if (world.isWorldUsed()) {
                     if (!printedNotice) {
                         printedNotice = true;
                         Logger.error("Not all worlds shutdown, force closing worlds");
                     }
+                    //Dont lock in the loopy thing, this should basicly never happen if it does something horrific happened
+                    this.activeWorldLock.unlockWrite(stamp);
                     while (world.isWorldUsed()) {
                         try {
                             //noinspection BusyWait
@@ -253,6 +256,7 @@ public abstract class VoxyInstance {
                             throw new RuntimeException(e);
                         }
                     }
+                    stamp = this.activeWorldLock.writeLock();
                 }
                 //Free the world
                 world.free();
@@ -271,5 +275,9 @@ public abstract class VoxyInstance {
 
     public boolean isIngestEnabled(WorldIdentifier worldId) {
         return true;
+    }
+
+    public boolean isRunning() {
+        return this.isRunning;
     }
 }

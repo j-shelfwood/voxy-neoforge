@@ -6,7 +6,6 @@ import me.cortex.voxy.common.config.ConfigBuildCtx;
 import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.storage.StorageConfig;
 import me.cortex.voxy.common.util.ThreadLocalMemoryBuffer;
-import me.cortex.voxy.common.world.SaveLoadSystem;
 import me.cortex.voxy.common.world.SaveLoadSystem3;
 import me.cortex.voxy.common.world.WorldSection;
 import me.cortex.voxy.common.world.other.Mapper;
@@ -16,12 +15,14 @@ import java.util.Arrays;
 import java.util.function.LongConsumer;
 
 public class SectionSerializationStorage extends SectionStorage {
+    public static final int BIGGEST_SERIALIZED_SECTION_SIZE = 32 * 32 * 32 * 8 * 2 + 8;
+
     private final StorageBackend backend;
     public SectionSerializationStorage(StorageBackend storageBackend) {
         this.backend = storageBackend;
     }
 
-    private static final ThreadLocalMemoryBuffer MEMORY_CACHE = new ThreadLocalMemoryBuffer(SaveLoadSystem.BIGGEST_SERIALIZED_SECTION_SIZE + 1024);
+    private static final ThreadLocalMemoryBuffer MEMORY_CACHE = new ThreadLocalMemoryBuffer(BIGGEST_SERIALIZED_SECTION_SIZE + 1024);
 
     public int loadSection(WorldSection into) {
         var data = this.backend.getSectionData(into.key, MEMORY_CACHE.get().createUntrackedUnfreeableReference());
@@ -48,7 +49,7 @@ public class SectionSerializationStorage extends SectionStorage {
     public void saveSection(WorldSection section) {
         var saveData = SaveLoadSystem3.serialize(section);
         this.backend.setSectionData(section.key, saveData);
-        saveData.free();
+        //Note that savedData isnt freed (the save system uses a cache)
     }
 
     @Override
@@ -72,8 +73,8 @@ public class SectionSerializationStorage extends SectionStorage {
     }
 
     @Override
-    public void iterateStoredSectionPositions(LongConsumer consumer) {
-        this.backend.iterateStoredSectionPositions(consumer);
+    public void iteratePositions(int level, LongConsumer consumer) {
+        this.backend.iteratePositions(level, consumer);
     }
 
     public static class Config extends SectionStorageConfig {

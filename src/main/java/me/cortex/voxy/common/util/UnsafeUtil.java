@@ -16,6 +16,7 @@ public class UnsafeUtil {
 
     private static final long BYTE_ARRAY_BASE_OFFSET = UNSAFE.arrayBaseOffset(byte[].class);
     private static final long SHORT_ARRAY_BASE_OFFSET = UNSAFE.arrayBaseOffset(short[].class);
+    private static final long LONG_ARRAY_BASE_OFFSET = UNSAFE.arrayBaseOffset(long[].class);
 
     public static void memcpy(long src, long dst, long length) {
         UNSAFE.copyMemory(src, dst, length);
@@ -47,4 +48,27 @@ public class UnsafeUtil {
     public static void memcpy(short[] src, long dst) {
         UNSAFE.copyMemory(src, SHORT_ARRAY_BASE_OFFSET, null, dst, (long) src.length <<1);
     }
+    public static void memcpy(long[] src, long dst) {
+        UNSAFE.copyMemory(src, LONG_ARRAY_BASE_OFFSET, null, dst, (long) src.length <<3);
+    }
+
+
+    //Cause lwjgl is being a clown with var handles, we need to do things ourselves
+
+
+    public static boolean memGetBoolean(long ptr) { return UNSAFE.getByte(null, ptr) != 0; }
+    public static byte memGetByte(long ptr)       { return UNSAFE.getByte(null, ptr); }
+    public static short memGetShort(long ptr)     { return UNSAFE.getShort(null, ptr); }
+    public static int memGetInt(long ptr)         { return UNSAFE.getInt(null, ptr); }
+    public static long memGetLong(long ptr)       { return UNSAFE.getLong(null, ptr); }
+    public static float memGetFloat(long ptr)     { return UNSAFE.getFloat(null, ptr); }
+    public static double memGetDouble(long ptr)   { return UNSAFE.getDouble(null, ptr); }
+
+    public static void memPutByte(long ptr, byte value)     { UNSAFE.putByte(null, ptr, value); }
+    public static void memPutShort(long ptr, short value)   { UNSAFE.putShort(null, ptr, value); }
+    public static void memPutInt(long ptr, int value)       { UNSAFE.putInt(null, ptr, value); }
+    public static void memPutLong(long ptr, long value)     { UNSAFE.putLong(null, ptr, value); }
+    public static void memPutFloat(long ptr, float value)   { UNSAFE.putFloat(null, ptr, value); }
+    public static void memPutDouble(long ptr, double value) { UNSAFE.putDouble(null, ptr, value); }
+
 }

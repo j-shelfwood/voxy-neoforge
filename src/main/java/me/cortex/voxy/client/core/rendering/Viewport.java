@@ -1,19 +1,17 @@
 package me.cortex.voxy.client.core.rendering;
 
+import me.cortex.voxy.client.core.RenderProperties;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.rendering.util.DepthFramebuffer;
 import me.cortex.voxy.client.core.rendering.util.HiZBuffer;
-// TODO: FogParameters removed in Sodium 0.6.x - fog rendering disabled for now
-// import net.caffeinemc.mods.sodium.client.util.FogParameters;
 import net.minecraft.util.Mth;
 import org.joml.*;
-import org.jetbrains.annotations.Nullable;
 
 import java.lang.reflect.Field;
 
 public abstract class Viewport <A extends Viewport<A>> {
     //public final HiZBuffer2 hiZBuffer = new HiZBuffer2();
-    public final HiZBuffer hiZBuffer = new HiZBuffer();
+    public final HiZBuffer hiZBuffer;
     public final DepthFramebuffer depthBoundingBuffer = new DepthFramebuffer();
 
     private static final Field planesField;
@@ -37,14 +35,14 @@ public abstract class Viewport <A extends Viewport<A>> {
     public double cameraX;
     public double cameraY;
     public double cameraZ;
-    // Disabled for Sodium 0.6.x compatibility - FogParameters no longer exists
-    // @Nullable public FogParameters fogParameters;
 
     public final Matrix4f MVP = new Matrix4f();
     public final Vector3i section = new Vector3i();
     public final Vector3f innerTranslation = new Vector3f();
 
-    protected Viewport() {
+    private final RenderProperties properties;
+
+    protected Viewport(RenderProperties properties) {
         Vector4f[] planes = null;
         try {
              planes = (Vector4f[]) planesField.get(this.frustum);
@@ -52,6 +50,9 @@ public abstract class Viewport <A extends Viewport<A>> {
             throw new RuntimeException(e);
         }
         this.frustumPlanes = planes;
+
+        this.properties = properties;
+        this.hiZBuffer = new HiZBuffer(properties);
     }
 
     public final void delete() {
@@ -73,8 +74,8 @@ public abstract class Viewport <A extends Viewport<A>> {
         return (A) this;
     }
 
-    public A setModelView(Matrix4f modelView) {
-        this.modelView = modelView;
+    public A setModelView(Matrix4fc modelView) {
+        this.modelView.set(modelView);
         return (A) this;
     }
 
@@ -90,14 +91,6 @@ public abstract class Viewport <A extends Viewport<A>> {
         this.height = height;
         return (A) this;
     }
-
-    // Disabled for Sodium 0.6.x compatibility - FogParameters no longer exists
-    /*
-    public A setFogParameters(FogParameters fogParameters) {
-        this.fogParameters = fogParameters;
-        return (A) this;
-    }
-    */
 
     public A update() {
         //MVP
@@ -118,7 +111,7 @@ public abstract class Viewport <A extends Viewport<A>> {
                 (float) (this.cameraZ-(sz<<5)));
 
         if (this.depthBoundingBuffer.resize(this.width, this.height)) {
-            this.depthBoundingBuffer.clear(0.0f);
+            this.depthBoundingBuffer.clear(this.properties.inverseClearDepth());
         }
 
         return (A) this;

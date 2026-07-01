@@ -2,46 +2,57 @@ package me.cortex.voxy.client.core.util;
 
 import it.unimi.dsi.fastutil.ints.IntArrayFIFOQueue;
 import it.unimi.dsi.fastutil.objects.ObjectArrayFIFOQueue;
-import it.unimi.dsi.fastutil.objects.ObjectArrayList;
-import me.cortex.voxy.client.core.gl.GlBuffer;
-import me.cortex.voxy.client.core.rendering.util.DownloadStream;
-import me.cortex.voxy.common.util.MemoryBuffer;
-import me.cortex.voxy.common.util.Pair;
 import me.cortex.voxy.common.util.TrackedObject;
-import org.lwjgl.system.MemoryUtil;
 
+import java.lang.reflect.Array;
 import java.util.Arrays;
-import java.util.function.Consumer;
 
 import static org.lwjgl.opengl.ARBTimerQuery.GL_TIMESTAMP;
 import static org.lwjgl.opengl.ARBTimerQuery.glQueryCounter;
-import static org.lwjgl.opengl.GL11.glFinish;
-import static org.lwjgl.opengl.GL11.glFlush;
 import static org.lwjgl.opengl.GL15.glDeleteQueries;
 import static org.lwjgl.opengl.GL15.glGenQueries;
 import static org.lwjgl.opengl.GL15C.*;
 import static org.lwjgl.opengl.GL33.glGetQueryObjecti64;
-import static org.lwjgl.opengl.GL42.glMemoryBarrier;
-import static org.lwjgl.opengl.GL44.GL_QUERY_RESULT_NO_WAIT;
-import static org.lwjgl.opengl.GL45.glGetQueryBufferObjectui64v;
 
 public class GPUTiming {
     public static GPUTiming INSTANCE = new GPUTiming();
 
-    private final GlTimestampQuerySet timingSet = new GlTimestampQuerySet();
+    private final GlTimestampQuerySet<String> timingSet = new GlTimestampQuerySet(String.class);
 
     private float[] timings = new float[0];
+    private String[] lables = new String[0];
+
+    private boolean enabled = false;
 
     public void marker() {
-        this.timingSet.capture(0);
+        this.marker(null);
+    }
+
+    public void marker(String lable) {
+        if (this.enabled) {
+            this.timingSet.capture(lable);
+        }
+    }
+
+    public void setEnabled(boolean enable) {
+        if (this.enabled != enable) {
+            this.enabled = enable;
+        }
     }
 
     public String getDebug() {
+        if (!this.enabled) {
+            return "";
+        }
         StringBuilder str = new StringBuilder("GpuTime: [");
         for (int i = 0; i < this.timings.length; i++) {
-            str.append(String.format("%.2f", this.timings[i]));
+            if (this.lables[i] != null) {
+                str.append(this.lables[i]+":"+String.format("%.2f", this.timings[i]));
+            } else {
+                str.append(String.format("%.2f", this.timings[i]));
+            }
             if (i!=this.timings.length-1) {
-                str.append(',');
+                str.append(", ");
             }
         }
         str.append(']');
@@ -54,13 +65,16 @@ public class GPUTiming {
 
             if (data.length-1!=this.timings.length) {
                 this.timings = new float[data.length-1];
+                this.lables = new String[meta.length-1];
             }
 
+            Arrays.fill(this.lables, null);
             for (int i = 1; i < meta.length; i++) {
                 long next = data[i];
                 long delta = next - current;
                 float time = (float) (((double)delta)/1_000_000);
                 this.timings[i-1] = Math.max(this.timings[i-1]*0.99f+time*0.01f, time);
+                this.lables[i-1] = meta[i-1];
                 current = next;
             }
         });
@@ -71,11 +85,12 @@ public class GPUTiming {
         this.timingSet.free();
     }
 
-    public interface TimingDataConsumer {
-        void accept(int[] metadata, long[] timings);
+    public interface TimingDataConsumer <T> {
+        void accept(T metadata, long[] timings);
     }
-    private static final class GlTimestampQuerySet extends TrackedObject {
-        private record InflightRequest(int[] queries, int[] meta, TimingDataConsumer callback) {
+    private static final class GlTimestampQuerySet <T> extends TrackedObject {
+
+        private record InflightRequest<T>(int[] queries, T[] meta, TimingDataConsumer<T[]> callback) {
             private boolean callbackIfReady(IntArrayFIFOQueue queryPool) {
                 boolean ready = glGetQueryObjecti(this.queries[this.queries.length-1], GL_QUERY_RESULT_AVAILABLE) == GL_TRUE;
                 if (!ready) {
@@ -91,14 +106,18 @@ public class GPUTiming {
             }
         }
         private final IntArrayFIFOQueue POOL = new IntArrayFIFOQueue();
-        private final ObjectArrayFIFOQueue<InflightRequest> INFLIGHT = new ObjectArrayFIFOQueue();
+        private final ObjectArrayFIFOQueue<InflightRequest<T>> INFLIGHT = new ObjectArrayFIFOQueue();
 
         private final int[] queries = new int[64];
-        private final int[] metadata = new int[64];
+        private final T[] metadata;
         private int index;
 
 
-        public void capture(int metadata) {
+        private GlTimestampQuerySet(Class<T> metaClass) {
+            this.metadata = (T[]) Array.newInstance(metaClass, 64);
+        }
+
+        public void capture(T metadata) {
             if (this.index > this.metadata.length) {
                 throw new IllegalStateException();
             }
@@ -110,11 +129,14 @@ public class GPUTiming {
 
         }
 
-        public void download(TimingDataConsumer consumer) {
-            var queries = Arrays.copyOf(this.queries, this.index);
-            var metadata = Arrays.copyOf(this.metadata, this.index);
-            this.index = 0;
-            this.INFLIGHT.enqueue(new InflightRequest(queries, metadata, consumer));
+        public void download(TimingDataConsumer<T[]> consumer) {
+            if (this.index != 0) {
+                var queries = Arrays.copyOf(this.queries, this.index);
+                var metadata = Arrays.copyOf(this.metadata, this.index);
+                Arrays.fill(this.metadata, null);
+                this.index = 0;
+                this.INFLIGHT.enqueue(new InflightRequest(queries, metadata, consumer));
+            }
         }
 
         public void tick() {

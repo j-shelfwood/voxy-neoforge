@@ -131,12 +131,18 @@ public final class WorldSection {
         return ((int)ATOMIC_STATE_HANDLE.get(this))>>1;
     }
 
-    //TODO: add the ability to hint to the tracker that yes the section is unloaded, try to cache it in a secondary cache since it will be reused/needed later
     public int release() {
-        return release(true);
+        return release(true, 0);
     }
 
-    int release(boolean unload) {
+
+    public static int RELEASE_HINT_POSSIBLE_REUSE = 1;
+    //Unload but specify possible reuse hints
+    public int release(int hints) {
+        return release(true, hints);
+    }
+
+    int release(boolean unload, int hints) {
         int state = ((int) ATOMIC_STATE_HANDLE.getAndAdd(this, -2)) - 2;
         if (state < 1) {
             throw new IllegalStateException("Section got into an invalid state");
@@ -146,7 +152,7 @@ public final class WorldSection {
         }
         if ((state>>1)==0 && unload) {
             if (this.tracker != null) {
-                this.tracker.tryUnload(this);
+                this.tracker.tryUnload(this, hints);
             } else {
                 //This should _ONLY_ ever happen when its an untracked section
                 // If it is, try release it
@@ -163,6 +169,9 @@ public final class WorldSection {
         int witness = (int) ATOMIC_STATE_HANDLE.compareAndExchange(this, 1, 0);
         if ((witness & 1) == 0 && witness != 0) {
             throw new IllegalStateException("Section marked as free but has refs");
+        }
+        if (witness == 1 && (this.isDirty || this.inSaveQueue)) {
+            throw new IllegalStateException("Section freed while marked as dirty or in the save queue: " + (this.isDirty?"dirty, ":"") + (this.inSaveQueue?"saveQueue":""));
         }
         return witness == 1;
     }
@@ -198,6 +207,7 @@ public final class WorldSection {
     }
 
     public long set(int x, int y, int z, long id) {
+        //TODO: this needs to update the block counts
         int idx = getIndex(x,y,z);
         long old = this.data[idx];
         this.data[idx] = id;
@@ -278,16 +288,22 @@ public final class WorldSection {
         return new WorldSection(lvl, x, y, z, null);
     }
 
-    public boolean exchangeIsInSaveQueue(boolean state) {
-        return ((boolean) IN_SAVE_QUEUE_HANDLE.compareAndExchange(this, !state, state)) == !state;
-    }
-
     public void markDirty() {
         IS_DIRTY_HANDLE.getAndSet(this, true);
     }
 
+
+    public boolean exchangeIsInSaveQueue(boolean state) {
+        return ((boolean) IN_SAVE_QUEUE_HANDLE.compareAndExchange(this, !state, state)) == !state;
+    }
+
+    //Should only be called by the saving service
     public boolean setNotDirty() {
         return (boolean) IS_DIRTY_HANDLE.getAndSet(this, false);
+    }
+
+    public boolean shouldSave() {
+        return this.isDirty&&!this.inSaveQueue;
     }
 
     public boolean isFreed() {

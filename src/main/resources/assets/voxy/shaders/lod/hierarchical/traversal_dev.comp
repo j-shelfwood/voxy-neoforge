@@ -8,7 +8,7 @@ layout(local_size_x=LOCAL_SIZE) in;//, local_size_y=1
 #import <voxy:lod/frustum.glsl>
 
 layout(binding = SCENE_UNIFORM_BINDING, std140) uniform SceneUniform {
-    mat4 VP;
+    mat4 MVP;
     ivec3 camSecPos;
     uint packedHizSize;
     vec3 camSubSecPos;
@@ -17,6 +17,7 @@ layout(binding = SCENE_UNIFORM_BINDING, std140) uniform SceneUniform {
     uint renderQueueMaxSize;
     uint frameId;
     uint requestQueueSize;
+    float renderDistance;
 };
 
 #import <voxy:lod/hierarchical/queue.glsl>
@@ -95,6 +96,26 @@ void enqueueSelfForRender(in UnpackedNode node) {
 }
 
 
+vec3 closestPointToCamera(in UnpackedNode node) {
+    vec3 nPos = vec3(((node.pos<<node.lodLevel)-camSecPos)<<5)-camSubSecPos;
+    float scale = 1<<(node.lodLevel+5);
+    return mix(mix(vec3(0), nPos, greaterThan(nPos, vec3(0))), nPos+scale, lessThan(nPos+scale, vec3(0)));
+}
+
+vec3 furthestPointToCamera(in UnpackedNode node) {
+    vec3 nPos = vec3(((node.pos<<node.lodLevel)-camSecPos)<<5)-camSubSecPos;
+    float scale = 1<<(node.lodLevel+5);
+    return mix(nPos+scale, mix(nPos, vec3(0), greaterThan(nPos, vec3(0))), lessThan(nPos+scale, vec3(0)));
+}
+
+bool isWithinRenderDistance(in UnpackedNode node) {
+    if (renderDistance<0.0f) return true;
+    vec3 close = closestPointToCamera(node);
+    float xzDist = close.x*close.x+close.z*close.z;
+    return xzDist <= renderDistance;
+}
+
+
 void traverse(in UnpackedNode node) {
     #ifdef HAS_STATISTICS
     atomicAdd(traversalCounts[node.lodLevel], 1);
@@ -120,7 +141,16 @@ void traverse(in UnpackedNode node) {
                 //TODO: use self mesh (is error state if it doesnt have one since all leaf nodes should have a mesh)
                 // Basicly guarenteed to have a mesh, if it doesnt it is very very bad and incorect since its a violation of the graph properties
                 // that all leaf nodes must contain a mesh
-                enqueueSelfForRender(node);
+
+                bool shouldRenderSelf = renderDistance<0.0f;
+                if (!shouldRenderSelf) {
+                    vec3 far = furthestPointToCamera(node);
+                    shouldRenderSelf = (far.x*far.x+far.z*far.z+(16*16*16))<=renderDistance;//the +16*16 is to add some buffer room
+                }
+
+                if (shouldRenderSelf) {
+                    enqueueSelfForRender(node);
+                }
             }
         } else {
             if (hasMesh(node)) {
@@ -148,7 +178,10 @@ void main() {
         UnpackedNode node;
         unpackNode(node, nodeId);
 
-        traverse(node);
+        //Check if were inside the render distastance before traversince
+        if (isWithinRenderDistance(node)) {
+            traverse(node);
+        }
 
         /*
         printf("GID:%d, NODE %d, %d, AA, %d, %d, %d, %d", gl_GlobalInvocationID.x, node, queueIdx, nodeQueueMetadata[queueIdx].x, nodeQueueMetadata[queueIdx].y, nodeQueueMetadata[queueIdx].z, nodeQueueMetadata[queueIdx].w);

@@ -6,6 +6,7 @@ import me.cortex.voxy.common.thread.ServiceManager;
 import me.cortex.voxy.common.voxelization.ILightingSupplier;
 import me.cortex.voxy.common.voxelization.VoxelizedSection;
 import me.cortex.voxy.common.voxelization.WorldConversionFactory;
+import me.cortex.voxy.common.voxelization.WorldVoxilizedSectionMipper;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.common.world.WorldUpdater;
 import me.cortex.voxy.commonImpl.VoxyCommon;
@@ -41,13 +42,13 @@ public class VoxelIngestService {
             WorldUpdater.insertUpdate(task.world, vs.zero());
         } else {
             VoxelizedSection csec = WorldConversionFactory.convert(
-                    SECTION_CACHE.get(),
+                    vs,
                     task.world.getMapper(),
                     section.getStates(),
                     section.getBiomes(),
                     getLightingSupplier(task)
             );
-            WorldConversionFactory.mipSection(csec, task.world.getMapper());
+            WorldVoxilizedSectionMipper.mipSection(csec, task.world.getMapper());
             WorldUpdater.insertUpdate(task.world, csec);
         }
     }
@@ -100,8 +101,7 @@ public class VoxelIngestService {
         var lightingProvider = chunk.getLevel().getLightEngine();
         boolean gotLighting = false;
 
-        // MC 1.21.1: LevelChunk.getMinSectionY() → chunk.getLevel().getMinSection()
-        int i = chunk.getLevel().getMinSection() - 1;
+        int i = chunk.getMinSection() - 1;
         boolean allEmpty = true;
         for (var section : chunk.getSections()) {
             i++;
@@ -116,8 +116,7 @@ public class VoxelIngestService {
 
         if (allEmpty&&!gotLighting) {
             //Special case all empty chunk columns, we need to clear it out
-            // MC 1.21.1: LevelChunk.getMinSectionY() → chunk.getLevel().getMinSection()
-            i = chunk.getLevel().getMinSection() - 1;
+            i = chunk.getMinSection() - 1;
             for (var section : chunk.getSections()) {
                 i++;
                 if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;
@@ -140,8 +139,7 @@ public class VoxelIngestService {
         var slp = lightingProvider.getLayerListener(LightLayer.SKY);
 
 
-        // MC 1.21.1: LevelChunk.getMinSectionY() → chunk.getLevel().getMinSection()
-        i = chunk.getLevel().getMinSection() - 1;
+        i = chunk.getMinSection() - 1;
         for (var section : chunk.getSections()) {
             i++;
             if (section == null || !shouldIngestSection(section, chunk.getPos().x, i, chunk.getPos().z)) continue;

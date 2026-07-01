@@ -2,8 +2,8 @@ package me.cortex.voxy.client.core.model;
 
 import net.caffeinemc.mods.sodium.client.util.color.ColorSRGB;
 import net.minecraft.client.renderer.texture.MipmapGenerator;
-// MC 1.21.1: ARGB class moved/removed - TODO: find replacement for linearToSrgbChannel()
-// import net.minecraft.util.ARGB;
+
+import java.util.Arrays;
 
 //Texturing utils to manipulate data from the model bakery
 public class TextureUtils {
@@ -39,6 +39,33 @@ public class TextureUtils {
             return ((data.colour()[index] >>> 24) & 0xff) > 1;
         }
         throw new IllegalArgumentException();
+    }
+
+
+    public static boolean hasTranslucentPixel(ColourDepthTextureData data) {
+        for (int i = 0; i < data.colour().length; i++) {
+            int alpha = data.colour()[i]>>>24;
+            int depth = data.depth()[i];
+            if ((depth&0xFF)!=0) {//only check on written pixels
+                if (alpha!=0&&alpha!=255) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public static boolean isSolidWhereDrawn(ColourDepthTextureData data) {
+        for (int i = 0; i < data.colour().length; i++) {
+            int alpha = data.colour()[i]>>>24;
+            int depth = data.depth()[i];
+            if ((depth&0xFF)!=0) {//only check on written pixels
+                if (alpha!=255) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
 
@@ -128,13 +155,31 @@ public class TextureUtils {
         //https://registry.khronos.org/OpenGL-Refpages/gl4/html/glDepthRange.xhtml
         // due to this and the unsigned bullshit, believe the depth value needs to get multiplied by 2
 
-        //Shouldent be needed due to the compute bake copy
-        depthF *= 2;
-        if (depthF > 1.00001f) {//Basicly only happens when a model goes out of bounds (thing)
-            //System.err.println("Warning: Depth greater than 1");
-            depthF = 1.0f;
-        }
+        ////Shouldent be needed due to the compute bake copy
+        //depthF *= 2;
+        //if (depthF > 1.00001f) {//Basicly only happens when a model goes out of bounds (thing)
+        //    //System.err.println("Warning: Depth greater than 1");
+        //    depthF = 1.0f;
+        //}
         return depthF;
+    }
+
+
+    public static long[] generateMask(ColourDepthTextureData data, int checkMode) {
+        return generateMask(data, checkMode, new long[data.width()*data.height()/64]);
+    }
+    public static long[] generateMask(ColourDepthTextureData data, int checkMode, long[] outMsk) {
+        Arrays.fill(outMsk, 0);
+        int i = 0;
+        for (int y = 0; y < data.height(); y++) {
+            for (int x = 0; x < data.width(); x++) {
+                if (wasPixelWritten(data, checkMode, i)) {
+                    outMsk[i/64] |= 1L << (i&63);
+                }
+                i++;
+            }
+        }
+        return outMsk;
     }
 
 
@@ -229,17 +274,12 @@ public class TextureUtils {
             a += darkend ? (C11 >>> 24) : ColorSRGB.srgbToLinear(C11 >>> 24);
         }
 
-        // MC 1.21.1: ARGB.linearToSrgbChannel() unavailable - implement manually
-        // Apply gamma correction (sRGB curve) to alpha when not darkened
-        int alphaValue = darkend ? ((int) a) / 4 : linearToSrgbChannel(a / 4);
-        return ColorSRGB.linearToSrgb(r / 4, g / 4, b / 4, alphaValue);
+        return ColorSRGB.linearToSrgb(
+                r / 4,
+                g / 4,
+                b / 4,
+                darkend ? ((int) a) / 4 : ARGB.linearToSrgbChannel(a / 4)
+        );
     }
 
-    /**
-     * Convert linear alpha value to sRGB using gamma correction.
-     * Replacement for ARGB.linearToSrgbChannel() which doesn't exist in MC 1.21.1
-     */
-    private static int linearToSrgbChannel(float linear) {
-        return Math.clamp((int) (Math.pow(linear, 1.0 / 2.2) * 255), 0, 255);
-    }
 }

@@ -3,7 +3,6 @@ layout(binding = 0, std140) uniform SceneUniform {
     ivec3 baseSectionPos;
     uint frameId;
     vec3 cameraSubPos;
-    float uEarthRadius; // 0.0 = disabled, otherwise radius in blocks for world curvature
 };
 
 //TODO: see if making the stride 2*4*4 bytes or something cause you get that 16 byte write
@@ -91,15 +90,5 @@ layout(binding = MODEL_COLOUR_BUFFER_BINDING, std430) readonly restrict buffer M
 layout(binding = POSITION_SCRATCH_BINDING, std430) POSITION_SCRATCH_ACCESS restrict buffer PositionScratchBuffer {
     uvec2 positionBuffer[];
 };
-#endif
-
-#ifdef LIGHTING_SAMPLER_BINDING
-
-layout(binding = LIGHTING_SAMPLER_BINDING) uniform sampler2D lightSampler;
-
-vec4 getLighting(uint index) {
-    int i2 = int(index);
-    return texture(lightSampler, clamp((vec2((i2>>4)&0xF, i2&0xF))/15, vec2(8.0f/256), vec2(248.0f/256)));
-}
 #endif
 

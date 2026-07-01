@@ -15,12 +15,9 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.dimension.DimensionType;
+import net.minecraft.world.level.storage.LevelResource;
 
 import java.io.File;
 import java.io.IOException;
@@ -28,7 +25,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
-
 
 public class VoxyCommands {
 
@@ -50,6 +46,8 @@ public class VoxyCommands {
                                 .executes(VoxyCommands::importZip)
                                 .then(Commands.argument("innerPath", StringArgumentType.string())
                                         .executes(VoxyCommands::importZip))))
+                .then(Commands.literal("current")
+                        .executes(VoxyCommands::importCurrentWorldIn))
                 .then(Commands.literal("cancel")
                         .executes(VoxyCommands::cancelImport));
 
@@ -74,7 +72,7 @@ public class VoxyCommands {
         }
         var wr = Minecraft.getInstance().levelRenderer;
         if (wr!=null) {
-            ((IGetVoxyRenderSystem)wr).shutdownRenderer();
+            ((IGetVoxyRenderSystem)wr).voxy$shutdownRenderer();
         }
 
         VoxyCommon.shutdownInstance();
@@ -85,9 +83,6 @@ public class VoxyCommands {
         if (r != null) r.allChanged();
         return 0;
     }
-
-
-
 
     private static int importDistantHorizons(CommandContext<CommandSourceStack> ctx) {
         var instance = (VoxyClientInstance)VoxyCommon.getInstance();
@@ -111,6 +106,25 @@ public class VoxyCommands {
         if (engine==null)return 1;
         return instance.getImportManager().makeAndRunIfNone(engine, ()->
                 new DHImporter(dbFile_, engine, Minecraft.getInstance().level, instance.getServiceManager(), instance.savingServiceRateLimiter))?0:1;
+    }
+
+    private static int importCurrentWorldIn(CommandContext<CommandSourceStack> ctx) {
+        if (VoxyCommon.getInstance() == null) {
+            ctx.getSource().sendFailure(Component.translatable("Voxy must be enabled in settings to use this"));
+            return 1;
+        }
+
+        var localServer = Minecraft.getInstance().getSingleplayerServer();
+        if (localServer == null) {
+            ctx.getSource().sendFailure(Component.translatable("You must be in single player to use this command"));
+            return 1;
+        }
+        var regionPath = DimensionType.getStorageFolder(Minecraft.getInstance().level.dimension(), localServer.getWorldPath(LevelResource.ROOT)).resolve("region");
+        if ((!regionPath.toFile().exists())||!regionPath.toFile().isDirectory()) {
+            ctx.getSource().sendFailure(Component.translatable("Cannot find region folder for current dimension"));
+            return 1;
+        }
+        return fileBasedImporter(regionPath.toFile())?0:1;
     }
 
     private static boolean fileBasedImporter(File directory) {

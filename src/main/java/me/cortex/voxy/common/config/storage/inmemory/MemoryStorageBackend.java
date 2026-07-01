@@ -9,6 +9,7 @@ import me.cortex.voxy.common.config.ConfigBuildCtx;
 import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.storage.StorageConfig;
 import me.cortex.voxy.common.util.MemoryBuffer;
+import me.cortex.voxy.common.world.WorldEngine;
 import net.minecraft.world.level.levelgen.RandomSupport;
 import org.apache.commons.lang3.stream.Streams;
 import org.lwjgl.system.MemoryUtil;
@@ -30,10 +31,18 @@ public class MemoryStorageBackend extends StorageBackend {
     }
 
     @Override
-    public void iterateStoredSectionPositions(LongConsumer consumer) {
+    public void iteratePositions(int level, LongConsumer consumer) {
+        LongConsumer filtered = consumer;
+        if (level != -1) {
+            filtered = (key) -> {
+                if (WorldEngine.getLevel(key) == level) {
+                    consumer.accept(key);
+                }
+            };
+        }
         for (var map : this.maps) {
             synchronized (map) {
-                map.keySet().forEach(consumer);
+                map.keySet().forEach(filtered);
             }
         }
     }

@@ -1,9 +1,11 @@
 package me.cortex.voxy.client.core.rendering.post;
 
+import me.cortex.voxy.client.core.RenderProperties;
 import me.cortex.voxy.client.core.gl.shader.Shader;
 import me.cortex.voxy.client.core.gl.shader.ShaderType;
 import me.cortex.voxy.client.core.rendering.util.SharedIndexBuffer;
 
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static org.lwjgl.opengl.GL11C.*;
@@ -16,22 +18,24 @@ public class FullscreenBlit {
     private static final int EMPTY_VAO = glCreateVertexArrays();
 
     private final Shader shader;
-    public FullscreenBlit(String fragId) {
-        this(fragId, (a)->a);
+    public FullscreenBlit(RenderProperties properties, String fragId) {
+        this(properties, fragId, b->{});
     }
 
-    public FullscreenBlit(String vertId, String fragId) {
-        this(vertId, fragId, (a)->a);
+    public FullscreenBlit(RenderProperties properties, String vertId, String fragId) {
+        this(properties, vertId, fragId, b->{});
     }
 
-    public <T extends Shader> FullscreenBlit(String fragId, Function<Shader.Builder<T>, Shader.Builder<T>> builder) {
-        this("voxy:post/fullscreen.vert", fragId, builder);
+    public <T extends Shader> FullscreenBlit(RenderProperties properties, String fragId, Consumer<Shader.Builder<T>> applyer) {
+        this(properties, "voxy:post/fullscreen.vert", fragId, applyer);
     }
 
-    public <T extends Shader> FullscreenBlit(String vertId, String fragId, Function<Shader.Builder<T>, Shader.Builder<T>> builder) {
-        this.shader = builder.apply((Shader.Builder<T>) Shader.make()
+    public <T extends Shader> FullscreenBlit(RenderProperties properties, String vertId, String fragId, Consumer<Shader.Builder<T>> applyer) {
+        this.shader = ((Shader.Builder<T>)Shader.make())
+                .apply(properties::apply)
                 .add(ShaderType.VERTEX, vertId)
-                .add(ShaderType.FRAGMENT, fragId))
+                .add(ShaderType.FRAGMENT, fragId)
+                .apply(applyer)
                 .compile();
     }
 

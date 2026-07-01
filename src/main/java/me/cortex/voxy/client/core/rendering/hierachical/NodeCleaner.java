@@ -1,6 +1,7 @@
 package me.cortex.voxy.client.core.rendering.hierachical;
 
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+import me.cortex.voxy.client.core.gl.Capabilities;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.shader.AutoBindingShader;
 import me.cortex.voxy.client.core.gl.shader.Shader;
@@ -11,6 +12,7 @@ import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import org.lwjgl.opengl.ARBDirectStateAccess;
 import org.lwjgl.system.MemoryUtil;
 
+import static me.cortex.voxy.client.core.rendering.util.UploadStream.alignUp;
 import static org.lwjgl.opengl.GL30C.glBindBufferRange;
 import static org.lwjgl.opengl.GL42C.glMemoryBarrier;
 import static org.lwjgl.opengl.GL43C.*;
@@ -146,8 +148,7 @@ public class NodeCleaner {
     public void updateIds(IntOpenHashSet collection) {
         if (!collection.isEmpty()) {
             int count = collection.size();
-            long addr = UploadStream.INSTANCE.rawUploadAddress(count * 4 + 16);//TODO ensure alignment, create method todo alignment things
-            addr = (addr+15)&~15L;//Align to 16 bytes
+            long addr = UploadStream.INSTANCE.rawUploadAddress(count*4);//Internally does upsizing alignement
 
             long ptr = UploadStream.INSTANCE.getBaseAddress() + addr;
             var iter = collection.iterator();
@@ -157,7 +158,7 @@ public class NodeCleaner {
             UploadStream.INSTANCE.commit();
 
             this.batchClear.bind();
-            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, UploadStream.INSTANCE.getRawBufferId(), addr, count*4L);
+            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, UploadStream.INSTANCE.getRawBufferId(), addr, UploadStream.alignUpAlloc(count*4));
             glUniform1ui(0, count);
             glUniform1ui(1, this.visibilityId);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);

@@ -1,10 +1,9 @@
 package me.cortex.voxy.client.core.rendering;
 
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
-import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.AbstractRenderPipeline;
+import me.cortex.voxy.client.core.RenderProperties;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlVertexArray;
 import me.cortex.voxy.client.core.gl.shader.AutoBindingShader;
@@ -39,48 +38,36 @@ public class ChunkBoundRenderer {
     private final Long2IntOpenHashMap chunk2idx = new Long2IntOpenHashMap(INIT_MAX_CHUNK_COUNT);
     private long[] idx2chunk = new long[INIT_MAX_CHUNK_COUNT];
     private final Shader rasterShader;
+    private final RenderProperties properties;
 
     private final LongOpenHashSet addQueue = new LongOpenHashSet();
     private final LongOpenHashSet remQueue = new LongOpenHashSet();
 
-    // Delayed removal to prevent pop-out when chunks unload
-    // Each entry is processed after REMOVAL_DELAY_FRAMES frames
-    // 12 frames @ 60fps = ~200ms delay for LOD system to prepare
-    private static final int REMOVAL_DELAY_FRAMES = 12;
-    private final LongArrayList[] delayedRemovalQueue = new LongArrayList[REMOVAL_DELAY_FRAMES];
-    private int delayQueueIndex = 0;
-
     private final AbstractRenderPipeline pipeline;
     public ChunkBoundRenderer(AbstractRenderPipeline pipeline) {
         this.chunk2idx.defaultReturnValue(-1);
-        this.pipeline = pipeline;
-
-        // Initialize delayed removal queues
-        for (int i = 0; i < REMOVAL_DELAY_FRAMES; i++) {
-            this.delayedRemovalQueue[i] = new LongArrayList();
-        }
+        this.properties = pipeline.properties;
 
         String vert = ShaderLoader.parse("voxy:chunkoutline/outline.vsh");
         String taa = pipeline.taaFunction("getTAA");
         if (taa != null) {
+            this.pipeline = pipeline;
             vert = vert+"\n\n\n"+taa;
+        } else {
+            this.pipeline = null;
         }
+
         this.rasterShader = Shader.makeAuto()
                 .addSource(ShaderType.VERTEX, vert)
                 .defineIf("TAA", taa != null)
                 .add(ShaderType.FRAGMENT, "voxy:chunkoutline/outline.fsh")
+                .apply(this.properties::apply)
                 .compile()
                 .ubo(0, this.uniformBuffer)
                 .ssbo(1, this.chunkPosBuffer);
     }
 
     public void addSection(long pos) {
-        // First check if it's pending removal in any delay queue
-        for (LongArrayList queue : this.delayedRemovalQueue) {
-            if (queue.rem(pos)) {
-                return; // Was pending removal, now cancelled
-            }
-        }
         if (!this.remQueue.remove(pos)) {
             this.addQueue.add(pos);
         }
@@ -88,37 +75,24 @@ public class ChunkBoundRenderer {
 
     public void removeSection(long pos) {
         if (!this.addQueue.remove(pos)) {
-            // Add to delayed removal queue instead of immediate removal
-            // This gives LOD system time to prepare before chunk bounds disappear
-            this.delayedRemovalQueue[this.delayQueueIndex].add(pos);
+            this.remQueue.add(pos);
         }
     }
 
     //Bind and render, changing as little gl state as possible so that the caller may configure how it wants to render
     public void render(Viewport<?> viewport) {
-        // Process delayed removals - rotate to next slot and move oldest entries to remQueue
-        int oldestSlot = (this.delayQueueIndex + 1) % REMOVAL_DELAY_FRAMES;
-        LongArrayList oldestQueue = this.delayedRemovalQueue[oldestSlot];
-        if (!oldestQueue.isEmpty()) {
-            for (int i = 0; i < oldestQueue.size(); i++) {
-                this.remQueue.add(oldestQueue.getLong(i));
-            }
-            oldestQueue.clear();
-        }
-        this.delayQueueIndex = oldestSlot;
-
         if (!this.remQueue.isEmpty()) {
             boolean wasEmpty = this.chunk2idx.isEmpty();
             this.remQueue.forEach(this::_remPos);//TODO: REPLACE WITH SCATTER COMPUTE
             this.remQueue.clear();
             if (this.chunk2idx.isEmpty()&&!wasEmpty) {//When going from stuff to nothing need to clear the depth buffer
-                viewport.depthBoundingBuffer.clear(0);
+                viewport.depthBoundingBuffer.clear(this.properties.inverseClearDepth());
             }
         }
 
         if (this.chunk2idx.isEmpty() && this.addQueue.isEmpty()) return;
 
-        viewport.depthBoundingBuffer.clear(0);
+        viewport.depthBoundingBuffer.clear(this.properties.inverseClearDepth());
 
         long ptr = UploadStream.INSTANCE.upload(this.uniformBuffer, 0, 128);
         long matPtr = ptr; ptr += 4*4*4;
@@ -126,23 +100,22 @@ public class ChunkBoundRenderer {
         final float renderDistance = Minecraft.getInstance().options.getEffectiveRenderDistance()*16;//In blocks
 
         {//This is recomputed to be in chunk section space not worldsection
-            int sx = (int)(viewport.cameraX);
-            int sy = (int)(viewport.cameraY);
-            int sz = (int)(viewport.cameraZ);
-            new Vector3i(sx, sy, sz).getToAddress(ptr); ptr += 4*4;
 
-            var negInnerSec = new Vector3f(
-                    (float) (viewport.cameraX - sx),
-                    (float) (viewport.cameraY - sy),
-                    (float) (viewport.cameraZ - sz));
+            //Camera block pos
+            int bx = (int)(viewport.cameraX);
+            int by = (int)(viewport.cameraY);
+            int bz = (int)(viewport.cameraZ);
+            new Vector3i(bx, by, bz).getToAddress(ptr); ptr += 4*4;
+
+            var negInnerBlock = new Vector3f(
+                    (float) (viewport.cameraX - bx),
+                    (float) (viewport.cameraY - by),
+                    (float) (viewport.cameraZ - bz));
 
 
-            negInnerSec.getToAddress(ptr); ptr += 4*3;
-            viewport.MVP.translate(negInnerSec.negate(), new Matrix4f()).getToAddress(matPtr);
+            negInnerBlock.getToAddress(ptr); ptr += 4*3;
+            viewport.MVP.translate(negInnerBlock.negate(), new Matrix4f()).getToAddress(matPtr);
             MemoryUtil.memPutFloat(ptr, renderDistance); ptr += 4;
-
-            // LOD boundary buffer - configurable overlap to prevent pop-in
-            MemoryUtil.memPutInt(ptr, VoxyConfig.CONFIG.lodBoundaryBuffer); ptr += 4;
         }
         UploadStream.INSTANCE.commit();
 
@@ -155,14 +128,14 @@ public class ChunkBoundRenderer {
             //"reverse depth buffer" it goes from 0->1 where 1 is far away
             glEnable(GL_CULL_FACE);
             glEnable(GL_DEPTH_TEST);
-            glDepthFunc(GL_GREATER);
+            glDepthFunc(this.properties.furtherDepthCompare());
         }
 
         glBindVertexArray(GlVertexArray.STATIC_VAO);
         viewport.depthBoundingBuffer.bind();
         this.rasterShader.bind();
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, SharedIndexBuffer.INSTANCE_BB_BYTE.id());
-        this.pipeline.bindUniforms();
+        if (this.pipeline != null) this.pipeline.bindUniforms();//shader TAA
 
         //Batch the draws into groups of size 32
         int count = this.chunk2idx.size();
@@ -176,7 +149,7 @@ public class ChunkBoundRenderer {
         {
             glFrontFace(GL_CCW);//Restore winding order
 
-            glDepthFunc(GL_LEQUAL);
+            glDepthFunc(this.properties.closerEqualDepthCompare());
 
             //TODO: check this is correct
             glEnable(GL_CULL_FACE);
@@ -258,11 +231,6 @@ public class ChunkBoundRenderer {
 
     public void reset() {
         this.chunk2idx.clear();
-        this.remQueue.clear();
-        this.addQueue.clear();
-        for (LongArrayList queue : this.delayedRemovalQueue) {
-            queue.clear();
-        }
     }
 
     public void free() {

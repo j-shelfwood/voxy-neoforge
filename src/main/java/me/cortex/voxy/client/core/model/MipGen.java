@@ -2,7 +2,6 @@ package me.cortex.voxy.client.core.model;
 
 import it.unimi.dsi.fastutil.bytes.ByteArrayFIFOQueue;
 import me.cortex.voxy.common.util.MemoryBuffer;
-import net.caffeinemc.mods.sodium.client.util.color.ColorSRGB;
 import org.lwjgl.system.MemoryUtil;
 
 import java.util.Arrays;

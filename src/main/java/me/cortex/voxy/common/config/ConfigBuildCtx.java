@@ -10,6 +10,7 @@ public class ConfigBuildCtx {
     //List of tokens
     public static final String BASE_SAVE_PATH = "{base_save_path}";
     public static final String WORLD_IDENTIFIER = "{world_identifier}";
+    public static final String PLAYER_UUID = "{player_uuid}";
     public static final String DEFAULT_STORAGE_PATH = BASE_SAVE_PATH+"/"+WORLD_IDENTIFIER+"/storage/";
 
 

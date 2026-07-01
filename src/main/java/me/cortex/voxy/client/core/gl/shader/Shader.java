@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static org.lwjgl.opengl.GL20.glDeleteProgram;
@@ -82,6 +83,7 @@ public class Shader extends TrackedObject {
             var clone = new Builder<>(this.constructor, this.processor);
             clone.defines.putAll(this.defines);
             clone.sources.putAll(this.sources);
+            clone.replacements.putAll(this.replacements);
             return clone;
         }
 
@@ -121,7 +123,7 @@ public class Shader extends TrackedObject {
         }
 
         public Builder<T> replace(String value, String replacement) {
-            this.defines.put(value, replacement);
+            this.replacements.put(value, replacement);
             return this;
         }
 
@@ -132,6 +134,11 @@ public class Shader extends TrackedObject {
 
         public Builder<T> addSource(ShaderType type, String source) {
             this.sources.put(type, this.processor.process(type, source));
+            return this;
+        }
+
+        public Builder<T> apply(Consumer<Builder<T>> applyer) {
+            applyer.accept(this);
             return this;
         }
 
@@ -195,7 +202,7 @@ public class Shader extends TrackedObject {
 
         private static int createShader(ShaderType type, String src) {
             int shader = GL20C.glCreateShader(type.gl);
-            {//https://github.com/CaffeineMC/sodium/blob/fc42a7b19836c98a35df46e63303608de0587ab6/src/main/java/me/jellysquid/mods/sodium/client/gl/shader/ShaderWorkarounds.java
+            {//https://github.com/CaffeineMC/sodium/blob/fc42a7b19836c98a35df46e63303608de0587ab6/src/main/java/net/caffeinemc/mods/sodium/client/gl/shader/ShaderWorkarounds.java
                 long ptr = MemoryUtil.memAddress(MemoryUtil.memUTF8(src, true));
                 try (var stack = MemoryStack.stackPush()) {
                     GL20C.nglShaderSource(shader, 1, stack.pointers(ptr).address0(), 0);

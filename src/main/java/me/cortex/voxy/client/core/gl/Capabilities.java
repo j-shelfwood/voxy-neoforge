@@ -35,6 +35,7 @@ public class Capabilities {
     public final boolean meshShaders;
     public final boolean INT64_t;
     public final long ssboMaxSize;
+    public final int ssboBindingAlignment;
     public final boolean isMesa;
     public final boolean canQueryGpuMemory;
     public final long totalDedicatedMemory;//Bytes, dedicated memory
@@ -82,6 +83,7 @@ public class Capabilities {
         }
 
         this.ssboMaxSize = glGetInteger64(GL_MAX_SHADER_STORAGE_BLOCK_SIZE);
+        this.ssboBindingAlignment = glGetInteger(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT);
 
         this.isMesa = glGetString(GL_VERSION).toLowerCase(Locale.ROOT).contains("mesa");
         var vendor = glGetString(GL_VENDOR).toLowerCase(Locale.ROOT);
@@ -101,8 +103,9 @@ public class Capabilities {
 
         if (this.compute&&this.isAmd) {
             this.hasBrokenDepthSampler = testDepthSampler();
-            // Boolean flag is sufficient for graceful degradation in VoxyClient.initVoxyClient()
-            // Throwing exception here bypasses the graceful error handling
+            if (this.hasBrokenDepthSampler) {
+                throw new IllegalStateException("it bork, amd is bork");
+            }
         } else {
             this.hasBrokenDepthSampler = false;
         }

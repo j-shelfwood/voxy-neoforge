@@ -1,5 +1,10 @@
 package me.cortex.voxy.commonImpl;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.TypeAdapter;
+import com.google.gson.stream.JsonReader;
+import com.google.gson.stream.JsonWriter;
 import me.cortex.voxy.common.world.WorldEngine;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
@@ -9,6 +14,7 @@ import net.minecraft.world.level.dimension.DimensionType;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -53,7 +59,6 @@ public class WorldIdentifier {
     private static <T> boolean equal(ResourceKey<T> a, ResourceKey<T> b) {
         if (a == b) return true;
         if (a == null || b == null) return false;
-        // MC 1.21.1: ResourceKey.identifier() → location()
         return a.registry().equals(b.registry()) && a.location().equals(b.location());
     }
 
@@ -118,7 +123,6 @@ public class WorldIdentifier {
 
     private static long registryKeyHashCode(ResourceKey<?> key) {
         var A = key.registry();
-        // MC 1.21.1: ResourceKey.identifier() → location()
         var B = key.location();
         int a = A==null?0:A.hashCode();
         int b = B==null?0:B.hashCode();
@@ -149,6 +153,48 @@ public class WorldIdentifier {
         } catch (
                 NoSuchAlgorithmException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    @Override
+    public String toString() {
+        return "WorldIdentifier[" + this.key.location().toString() + ", " + this.biomeSeed + ", " + this.dimension.location().toString() + ']';
+    }
+
+    public static class GsonAdapter extends TypeAdapter<WorldIdentifier> {
+        public static final GsonAdapter INSTANCE = new GsonAdapter();
+
+        private GsonAdapter(){}
+
+        @Override
+        public void write(JsonWriter writer, WorldIdentifier identifier) throws IOException {
+            writer.beginObject();
+
+            writer.name("key");
+            writer.value(identifier.key.location().toString());
+
+            writer.name("biomeSeed");
+            writer.value(identifier.biomeSeed);
+
+            writer.name("dimension");
+            writer.value(identifier.dimension.location().toString());
+
+            writer.endObject();
+        }
+
+
+        private static final Gson GSON = new Gson();
+        @Override
+        public WorldIdentifier read(JsonReader reader) throws IOException {
+            var obj = GSON.getAdapter(JsonElement.class).read(reader).getAsJsonObject();
+
+            var sKey = obj.getAsJsonPrimitive("key").getAsString();
+            long biomeSeed = obj.getAsJsonPrimitive("biomeSeed").getAsLong();
+            var sDim = obj.getAsJsonPrimitive("dimension").getAsString();
+
+            var key = ResourceKey.create(Registries.DIMENSION, ResourceLocation.parse(sKey));
+            var dim = ResourceKey.create(Registries.DIMENSION_TYPE, ResourceLocation.parse(sDim));
+            return new WorldIdentifier(key, biomeSeed, dim);
         }
     }
 }

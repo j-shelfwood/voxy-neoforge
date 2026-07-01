@@ -15,7 +15,7 @@ public class DelegatingStorageAdaptor extends StorageBackend {
     }
 
     @Override
-    public void iterateStoredSectionPositions(LongConsumer consumer) {this.delegate.iterateStoredSectionPositions(consumer);}
+    public void iteratePositions(int level, LongConsumer consumer) {this.delegate.iteratePositions(level, consumer);}
 
     @Override
     public MemoryBuffer getSectionData(long key, MemoryBuffer scratch) {

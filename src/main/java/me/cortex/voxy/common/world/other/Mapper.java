@@ -5,7 +5,10 @@ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.IMappingStorage;
 import me.cortex.voxy.common.util.Pair;
+import me.cortex.voxy.common.world.other.Mapper.BiomeEntry;
+import me.cortex.voxy.common.world.other.Mapper.StateEntry;
 import net.minecraft.SharedConstants;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtAccounter;
@@ -13,13 +16,15 @@ import net.minecraft.nbt.NbtIo;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.util.datafix.DataFixers;
 import net.minecraft.util.datafix.fixes.References;
+import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.biome.Biome;
-import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LeavesBlock;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.FluidState;
+
 import org.lwjgl.system.MemoryUtil;
 
 import java.io.ByteArrayInputStream;
@@ -201,6 +206,7 @@ public class Mapper {
         buffer.rewind();
         this.storage.putIdMapping(entry.id | (BLOCK_STATE_TYPE<<30), buffer);
         MemoryUtil.memFree(buffer);
+        //this.storage.flush();
 
         if (this.newStateCallback!=null)this.newStateCallback.accept(entry);
         return entry;
@@ -224,6 +230,7 @@ public class Mapper {
         buffer.rewind();
         this.storage.putIdMapping(entry.id | (BIOME_TYPE<<30), buffer);
         MemoryUtil.memFree(buffer);
+        //this.storage.flush();
 
         if (this.newBiomeCallback!=null)this.newBiomeCallback.accept(entry);
         return entry;
@@ -260,7 +267,6 @@ public class Mapper {
     }
 
     public int getIdForBiome(Holder<Biome> biome) {
-        // MC 1.21.1: ResourceKey.identifier() → location()
         String biomeId = biome.unwrapKey().get().location().toString();
         var entry = this.biome2biomeEntry.get(biomeId);
         if (entry == null) {
@@ -360,9 +366,34 @@ public class Mapper {
             if (state.getBlock() instanceof LeavesBlock) {
                 this.opacity = 15;
             } else {
-                // MC 1.21.1: getLightBlock() requires (BlockGetter, BlockPos) parameters
-                // Use EmptyBlockGetter.INSTANCE and BlockPos.ZERO (same as vanilla's BlockBehaviour.Cache)
-                this.opacity = state.getLightBlock(EmptyBlockGetter.INSTANCE, BlockPos.ZERO);
+                this.opacity = state.getLightBlock(new BlockGetter() {
+
+                    @Override
+                    public int getHeight() {
+                        return 0;
+                    }
+
+                    @Override
+                    public int getMinBuildHeight() {
+                        return 0;
+                    }
+
+                    @Override
+                    public BlockEntity getBlockEntity(BlockPos arg0) {
+                        return null;
+                    }
+
+                    @Override
+                    public BlockState getBlockState(BlockPos blockPos) {
+                        return state;
+                    }
+
+                    @Override
+                    public FluidState getFluidState(BlockPos blockPos) {
+                        return state.getFluidState();
+                    }
+                    
+                }, BlockPos.ZERO);
             }
         }
 
@@ -382,16 +413,13 @@ public class Mapper {
         public static StateEntry deserialize(int id, byte[] data, boolean[] forceResave) {
             try {
                 var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtAccounter.unlimitedHeap());
-                // MC 1.21.1: CompoundTag.getIntOr() → contains() + getInt()
-                if ((compound.contains("id") ? compound.getInt("id") : -1) != id) {
+                if (compound.getInt("id") != id) {
                     throw new IllegalStateException("Encoded id != expected id");
                 }
-                // MC 1.21.1: CompoundTag.getCompound() returns empty CompoundTag if not found (not Optional)
                 var bsc = compound.getCompound("block_state");
                 var state = BlockState.CODEC.parse(NbtOps.INSTANCE, bsc);
                 if (state.isError()) {
                     Logger.info("Could not decode blockstate, attempting fixes, error: "+ state.error().get().message());
-                    // MC 1.21.1: WorldVersion.dataVersion() → getDataVersion(), version() → getVersion()
                     bsc = (CompoundTag) DataFixers.getDataFixer().update(References.BLOCK_STATE, new Dynamic<>(NbtOps.INSTANCE,bsc),0, SharedConstants.getCurrentVersion().getDataVersion().getVersion()).getValue();
                     state = BlockState.CODEC.parse(NbtOps.INSTANCE, bsc);
                     if (state.isError()) {
@@ -436,12 +464,10 @@ public class Mapper {
         public static BiomeEntry deserialize(int id, byte[] data) {
             try {
                 var compound = NbtIo.readCompressed(new ByteArrayInputStream(data), NbtAccounter.unlimitedHeap());
-                // MC 1.21.1: CompoundTag.getIntOr() → contains() + getInt()
-                if ((compound.contains("id") ? compound.getInt("id") : -1) != id) {
+                if (compound.getInt("id") != id) {
                     throw new IllegalStateException("Encoded id != expected id");
                 }
-                // MC 1.21.1: CompoundTag.getStringOr() → contains() + getString()
-                String biome = compound.contains("biome_id") ? compound.getString("biome_id") : null;
+                String biome = compound.getString("biome_id");
                 return new BiomeEntry(id, biome);
             } catch (IOException e) {
                 throw new RuntimeException(e);

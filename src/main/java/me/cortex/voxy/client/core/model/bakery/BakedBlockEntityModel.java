@@ -4,9 +4,10 @@ package me.cortex.voxy.client.core.model.bakery;
 import me.cortex.voxy.common.Logger;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.model.Model;
-import net.minecraft.client.renderer.SubmitNodeStorage;
+import net.minecraft.client.renderer.RenderType;
+// import net.minecraft.client.renderer.SubmitNodeStorage;
 import net.minecraft.core.BlockPos;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
@@ -34,10 +35,7 @@ public class BakedBlockEntityModel {
                 if (textureId == null) {
                     Logger.error("ERROR: Empty texture id for layer: " + layer);
                 } else {
-                    // TODO: MC 1.21.1 - AbstractTexture.getTexture() and Blaze3D GlTexture.glId() not accessible
-                    // Need mixin accessor for texture GL ID
-                    throw new UnsupportedOperationException("Texture GL ID access not yet implemented for MC 1.21.1");
-                    // texId = getTextureId(Minecraft.getInstance().getTextureManager().getTexture(textureId));
+                    texId = Minecraft.getInstance().getTextureManager().getTexture(textureId).getId();
                 }
             }
             if (texId == 0) continue;
