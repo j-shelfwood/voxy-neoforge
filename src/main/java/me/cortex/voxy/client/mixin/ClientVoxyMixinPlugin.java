@@ -13,6 +13,7 @@ public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
     private static boolean valkyrienSkiesInstalled;
     private static boolean nvidiumInstalled;
     private static boolean connectorInstalled;
+    private static boolean irisInstalled;
     private static boolean voxyWorldGenInstalled;
 
     @Override
@@ -20,6 +21,7 @@ public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
         valkyrienSkiesInstalled = isModLoaded("valkyrienskies");
         nvidiumInstalled = isModLoaded("nvidium");
         connectorInstalled = isModLoaded("connector");
+        irisInstalled = isModLoaded("iris");
         voxyWorldGenInstalled = isModLoaded("voxyworldgenv2");
     }
 
@@ -42,7 +44,23 @@ public class ClientVoxyMixinPlugin implements IMixinConfigPlugin {
             mixins.add("sodium.MixinDefaultChunkRenderer");
         }
 
-        mixins.add("worldgen.MixinChunkGenerationManager");
+        if (irisInstalled) {
+            mixins.add("iris.CustomUniformsAccessor");
+            mixins.add("iris.IrisRenderingPipelineAccessor");
+            mixins.add("iris.MixinIris");
+            mixins.add("iris.MixinIrisRenderingPipeline");
+            mixins.add("iris.MixinIrisSamplers");
+            mixins.add("iris.MixinLevelRenderer");
+            mixins.add("iris.MixinMatrixUniforms");
+            mixins.add("iris.MixinPackRenderTargetDirectives");
+            mixins.add("iris.MixinProgramSet");
+            mixins.add("iris.MixinShaderPackSourceNames");
+            mixins.add("iris.MixinStandardMacros");
+        }
+
+        if (voxyWorldGenInstalled) {
+            mixins.add("worldgen.MixinChunkGenerationManager");
+        }
 
         return mixins;
     }

@@ -154,14 +154,14 @@ public class VoxyConfigMenu implements ConfigEntryPoint {
                                 new IntOption(
                                         "voxy:fog_intensity",
                                         Component.translatable("voxy.config.general.fogIntensity"),
-                                        ()->Math.round(CFG.fogIntensity * 100), v->CFG.fogIntensity=v / 100,
+                                        ()->Math.round(CFG.fogIntensity * 100), v->CFG.fogIntensity=v / 100f,
                                         new Range(0, 100, 1))
                                         .setImpact(OptionImpact.LOW)
                                         .setPostChangeFlags(RENDER_RELOAD),
                                 new IntOption(
                                         "voxy:fog_density",
                                         Component.translatable("voxy.config.general.fogDensity"),
-                                        ()->Math.round(CFG.fogDensity * 100), v->CFG.fogDensity=v / 100,
+                                        ()->Math.round(CFG.fogDensity * 100), v->CFG.fogDensity=v / 100f,
                                         new Range(0, 100, 1))
                                         .setImpact(OptionImpact.LOW)
                                         .setPostChangeFlags(RENDER_RELOAD),

@@ -12,6 +12,16 @@ base {
     archivesName = project.archives_base_name
 }
 
+// ── Optional libs/ dependencies (gitignored) ─────────────────────────
+// These jars are not resolvable from public repositories (Modrinth
+// NeoForge artifacts use thin bootstrap jars, not the real mod jar;
+// VWGV2 has no Maven publishing).  On a clean checkout the build
+// compiles without them; drop the jars in libs/ to enable full parity.
+
+def hasSodiumJar  = file('libs/sodium-neoforge-0.8.12-beta.2-mod.jar').exists()
+def hasIrisJar    = file('libs/iris-neoforge-1.8.14-beta.1.jar').exists()
+def hasVWGV2Jar   = file('libs/voxyworldgen-neoforge-2.3.1.jar').exists()
+
 // Exclude optional integrations from compilation - not all available for NeoForge 1.21.1
 // These can be re-enabled once NeoForge versions become available
 sourceSets {
@@ -40,6 +50,20 @@ sourceSets {
 
             // BlockableEventLoop mixin — isNonRecoverable() removed in MC 1.21.1.
             exclude 'me/cortex/voxy/client/mixin/minecraft/MixinBlockableEventLoop.java'
+
+            // Exclude optional integrations when their compile-time jars are missing.
+            // The mixin plugin (ClientVoxyMixinPlugin) gates the mixins at runtime too.
+            if (!hasIrisJar) {
+                exclude 'me/cortex/voxy/client/mixin/iris/**'
+                exclude 'me/cortex/voxy/client/iris/**'
+                exclude 'me/cortex/voxy/client/core/util/IrisUtil.java'
+                exclude 'me/cortex/voxy/client/core/RenderPipelineFactory.java'
+                exclude 'me/cortex/voxy/client/core/RenderProperties.java'
+                exclude 'me/cortex/voxy/client/core/IrisVoxyRenderPipeline.java'
+            }
+            if (!hasVWGV2Jar) {
+                exclude 'me/cortex/voxy/client/mixin/worldgen/**'
+            }
         }
     }
 }
@@ -169,16 +193,22 @@ dependencies {
     // pipeline lives in META-INF/jarjar (NOT on the javac classpath). So we compile against
     // the extracted real mod jar (exact NeoForge/Mojmap-mapped classes); the user's installed
     // Sodium provides these classes at runtime. See libs/ (gitignored).
-    compileOnly files('libs/sodium-neoforge-0.8.12-beta.2-mod.jar')
+    if (hasSodiumJar) {
+        compileOnly files('libs/sodium-neoforge-0.8.12-beta.2-mod.jar')
+    }
 
     // Iris for NeoForge — compile against the pack's iris-neoforge 1.8.14 (ships classes directly,
     // unlike Sodium). voxy 0.2.15 targets iris 1.8.8; the 1.8.x internal API is compatible.
     // Provides net.irisshaders.iris.* for the shader-pack integration (full parity).
-    compileOnly files('libs/iris-neoforge-1.8.14-beta.1.jar')
+    if (hasIrisJar) {
+        compileOnly files('libs/iris-neoforge-1.8.14-beta.1.jar')
+    }
 
     // Voxy World Gen V2 — compile against its classes so our c2me fix mixin
     // (MixinChunkGenerationManager) can reference ChunkGenerationManager. Not bundled.
-    compileOnly files('libs/voxyworldgen-neoforge-2.3.1.jar')
+    if (hasVWGV2Jar) {
+        compileOnly files('libs/voxyworldgen-neoforge-2.3.1.jar')
+    }
 
     // Lithium for NeoForge (0.15.1 - latest for MC 1.21.1)
     implementation("maven.modrinth:lithium:mc1.21.1-0.15.1-neoforge")
@@ -270,6 +300,55 @@ task validateMixins(type: Exec) {
     // Only run if script exists
     onlyIf {
         file('scripts/validate_mixins.sh').exists()
+    }
+}
+
+// === VWGV2 bytecode patch (c2me deadlock fix) ===
+// Mixin cannot @Redirect inside synthetic lambda methods, so we patch the
+// VWGV2 jar directly at build time: change the executor passed to
+// whenCompleteAsync from the MinecraftServer (which c2me can block via
+// managedBlock) to ForkJoinPool.commonPool().  Also fixes a NetworkHandler
+// SEND_POOL termination bug across integrated-server restarts.
+if (hasVWGV2Jar) {
+    def vwgv2Original = file('libs/voxyworldgen-neoforge-2.3.1.jar')
+    def vwgv2Patched  = file('libs/voxyworldgen-neoforge-2.3.1-patched.jar')
+
+    def patchVWGV2Compile = tasks.register('compilePatchVWGV2', JavaCompile) {
+        description = 'Compiles the VWGV2 bytecode patcher'
+        source = files('scripts/PatchVWGV2.java')
+        // ASM is on the main compile classpath via NeoGradle → Mixin
+        classpath = sourceSets.main.compileClasspath
+        destinationDirectory = layout.buildDirectory.dir('patcher-classes')
+        options.release = 21
+    }
+
+    tasks.register('patchVWGV2Jar', JavaExec) {
+        description = 'Patches the VWGV2 jar to prevent c2me deadlocks'
+        group = 'build'
+        dependsOn patchVWGV2Compile
+
+        inputs.file(vwgv2Original)
+        outputs.file(vwgv2Patched)
+
+        classpath = files(patchVWGV2Compile.get().destinationDirectory,
+                          sourceSets.main.compileClasspath)
+        mainClass = 'PatchVWGV2'
+        args = [vwgv2Original.absolutePath, vwgv2Patched.absolutePath]
+        // file existence is already checked by hasVWGV2Jar
+    }
+
+    // Compile against the patched jar so MixinChunkGenerationManager can
+    // reference ChunkGenerationManager.  The mixin's @Inject for shutdown
+    // order is applied at runtime; the c2me-deadlock fix is in the patched
+    // jar itself (not a mixin — see PatchVWGV2.java).
+    compileJava {
+        dependsOn patchVWGV2Jar
+        // swap the compileOnly reference from the original to the patched jar
+        doFirst {
+            def orig = files('libs/voxyworldgen-neoforge-2.3.1.jar')
+            def patched = files(vwgv2Patched)
+            classpath = classpath.minus(orig).plus(patched)
+        }
     }
 }
 
