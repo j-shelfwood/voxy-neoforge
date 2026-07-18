@@ -31,6 +31,9 @@ sourceSets {
             // ModMenu integration (Fabric-only)
             exclude 'me/cortex/voxy/client/config/ModMenuIntegration.java'
 
+            // SodiumOptionsAPI integration uses Sodium 0.6.x option types (removed in 0.8.x)
+            exclude 'me/cortex/voxy/client/config/VoxySodiumOptions.java'
+
             // Vivecraft VR integration - ViewportSelector now NeoForge-compatible
             // ViewportSelector no longer excluded
 
@@ -75,7 +78,7 @@ repositories {
         forRepository {
             maven {
                 name "caffeinemcRepository"
-                url "https://maven.caffeinemc.net/snapshots"
+                url "https://maven.caffeinemc.net/releases"
             }
         }
         filter {
@@ -180,8 +183,8 @@ dependencies {
     // Forgified Fabric API for compatibility (includes Fabric Loader API)
     implementation "org.sinytra.forgified-fabric-api:forgified-fabric-api:${project.forgified_fabric_version}"
 
-    // Sodium for NeoForge (0.6.13 - latest for MC 1.21.1)
-    implementation "maven.modrinth:sodium:mc1.21.1-0.6.13-neoforge"
+    // Sodium for NeoForge 0.8.12 (stable) - compile against CaffeineMC maven; users install Modrinth jar at runtime
+    compileOnly "net.caffeinemc:sodium-neoforge-mod:${project.sodium_version}"
 
     // Lithium for NeoForge (0.15.1 - latest for MC 1.21.1)
     implementation("maven.modrinth:lithium:mc1.21.1-0.15.1-neoforge")

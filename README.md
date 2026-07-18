@@ -47,7 +47,7 @@ You might wonder: "Why not just use the Fabric version with [Sinytra Connector](
 - Delayed chunk unloading to prevent pop-out effects
 
 ### Current Limitations
-- Requires Sodium 0.6.13+ (NeoForge version)
+- Requires Sodium 0.8.12+ (NeoForge version)
 - Some optional integrations not yet ported (Iris, Nvidium, Vivecraft)
 - Debug screen integration disabled (MC 1.21.1 API changes)
 
@@ -59,7 +59,7 @@ You might wonder: "Why not just use the Fabric version with [Sinytra Connector](
 |------------|---------|------|
 | Minecraft | 1.21.1 | - |
 | NeoForge | 21.1.x | [NeoForge](https://neoforged.net/) |
-| Sodium | mc1.21.1-0.6.13-neoforge | [Modrinth](https://modrinth.com/mod/sodium/version/mc1.21.1-0.6.13-neoforge) |
+| Sodium | mc1.21.1-0.8.12-neoforge | [Modrinth](https://modrinth.com/mod/sodium/version/mc1.21.1-0.8.12-neoforge) |
 | Forgified Fabric API | 0.116.7+2.2.0+1.21.1 | [Modrinth](https://modrinth.com/mod/forgified-fabric-api/version/0.116.7+2.2.0+1.21.1) |
 
 ### Recommended Dependencies

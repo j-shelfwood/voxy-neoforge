@@ -1,6 +1,7 @@
 package me.cortex.voxy.common.config.storage.rocksdb;
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
+import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
 import me.cortex.voxy.common.config.storage.StorageBackend;
 import me.cortex.voxy.common.config.storage.StorageConfig;
@@ -10,7 +11,11 @@ import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.rocksdb.*;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -27,30 +32,45 @@ public class RocksDBStorageBackend extends StorageBackend {
     private final List<AbstractImmutableNativeReference> closeList = new ArrayList<>();
 
     public RocksDBStorageBackend(String path) {
-        /*
-        var lockPath = new File(path).toPath().resolve("LOCK");
-        if (Files.exists(lockPath)) {
-            System.err.println("WARNING, deleting rocksdb LOCK file");
-            int attempts = 10;
-            while (attempts-- != 0) {
-                try {
-                    Files.delete(lockPath);
-                    break;
-                } catch (IOException e) {
-                    try {
-                        Thread.sleep(1000);
-                    } catch (InterruptedException ex) {
-                        throw new RuntimeException(ex);
-                    }
-                }
-            }
-            if (Files.exists(lockPath)) {
-                throw new RuntimeException("Unable to delete rocksdb lock file");
-            }
-        }
-         */
         RocksDB.loadLibrary();
 
+        OpenedDatabase opened;
+        try {
+            opened = openDatabase(path);
+        } catch (RocksDBException e) {
+            if (!isRecoverableCorruption(e)) {
+                throw new RuntimeException(e);
+            }
+
+            Logger.error("Corrupted Voxy LOD database at " + path + ". Backing up and creating a fresh database.");
+            Logger.error("LOD data for this world will be rebuilt as you explore. Cause: " + e.getMessage());
+
+            try {
+                backupCorruptedStorage(path);
+                opened = openDatabase(path);
+            } catch (RocksDBException | IOException recoveryFailure) {
+                throw new RuntimeException("Failed to recover corrupted Voxy database at " + path, recoveryFailure);
+            }
+        }
+
+        this.db = opened.db;
+        this.worldSections = opened.worldSections;
+        this.idMappings = opened.idMappings;
+        this.sectionReadOps = opened.sectionReadOps;
+        this.sectionWriteOps = opened.sectionWriteOps;
+        this.closeList.addAll(opened.closeList);
+    }
+
+    private record OpenedDatabase(
+            RocksDB db,
+            ColumnFamilyHandle worldSections,
+            ColumnFamilyHandle idMappings,
+            ReadOptions sectionReadOps,
+            WriteOptions sectionWriteOps,
+            List<AbstractImmutableNativeReference> closeList
+    ) {}
+
+    private static OpenedDatabase openDatabase(String path) throws RocksDBException {
         //TODO: FIXME: DONT USE THE SAME options PER COLUMN FAMILY
         final ColumnFamilyOptions cfOpts = new ColumnFamilyOptions()
                 .setCompressionType(CompressionType.ZSTD_COMPRESSION)
@@ -89,31 +109,52 @@ public class RocksDBStorageBackend extends StorageBackend {
 
         List<ColumnFamilyHandle> handles = new ArrayList<>();
 
-        try {
-            this.db = RocksDB.open(options,
-                    path, cfDescriptors,
-                    handles);
+        RocksDB db = RocksDB.open(options, path, cfDescriptors, handles);
 
-            this.sectionReadOps = new ReadOptions();
-            this.sectionWriteOps = new WriteOptions();
+        ReadOptions sectionReadOps = new ReadOptions();
+        WriteOptions sectionWriteOps = new WriteOptions();
 
-            this.closeList.addAll(handles);
-            this.closeList.add(this.db);
-            this.closeList.add(options);
-            this.closeList.add(cfOpts);
-            this.closeList.add(cfWorldSecOpts);
-            this.closeList.add(this.sectionReadOps);
-            this.closeList.add(this.sectionWriteOps);
-            this.closeList.add(filter);
-            this.closeList.add(bCache);
+        List<AbstractImmutableNativeReference> closeList = new ArrayList<>();
+        closeList.addAll(handles);
+        closeList.add(db);
+        closeList.add(options);
+        closeList.add(cfOpts);
+        closeList.add(cfWorldSecOpts);
+        closeList.add(sectionReadOps);
+        closeList.add(sectionWriteOps);
+        closeList.add(filter);
+        closeList.add(bCache);
 
-            this.worldSections = handles.get(1);
-            this.idMappings = handles.get(2);
+        ColumnFamilyHandle worldSections = handles.get(1);
+        ColumnFamilyHandle idMappings = handles.get(2);
 
-            this.db.flushWal(true);
-        } catch (RocksDBException e) {
-            throw new RuntimeException(e);
+        db.flushWal(true);
+
+        return new OpenedDatabase(db, worldSections, idMappings, sectionReadOps, sectionWriteOps, closeList);
+    }
+
+    private static boolean isRecoverableCorruption(RocksDBException e) {
+        String message = e.getMessage();
+        if (message == null) {
+            return false;
         }
+        String lower = message.toLowerCase();
+        return lower.contains("corruption")
+                || lower.contains("corrupted")
+                || (lower.contains("no such file") && (lower.contains(".sst") || lower.contains("manifest")));
+    }
+
+    private static void backupCorruptedStorage(String path) throws IOException {
+        Path storagePath = Path.of(path);
+        if (!Files.exists(storagePath)) {
+            Files.createDirectories(storagePath);
+            return;
+        }
+
+        Path backupPath = storagePath.resolveSibling(storagePath.getFileName().toString() + ".corrupted." + System.currentTimeMillis());
+        Files.move(storagePath, backupPath, StandardCopyOption.REPLACE_EXISTING);
+        Logger.info("Backed up corrupted Voxy database to " + backupPath);
+        Files.createDirectories(storagePath);
     }
 
     @Override

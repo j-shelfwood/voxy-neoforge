@@ -10,6 +10,7 @@ import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.world.WorldEngine;
 import me.cortex.voxy.commonImpl.VoxyCommon;
 import me.cortex.voxy.commonImpl.WorldIdentifier;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.LevelRenderer;
 import org.jetbrains.annotations.Nullable;
@@ -24,6 +25,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
     @Shadow private @Nullable ClientLevel level;
     @Unique private VoxyRenderSystem renderer;
+    @Unique private boolean voxy$rendererCreationFailed;
 
     @Override
     public VoxyRenderSystem getVoxyRenderSystem() {
@@ -34,14 +36,34 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
     private void reloadVoxyRenderer(CallbackInfo ci) {
         this.shutdownRenderer();
         if (this.level != null) {
-            this.createRenderer();
+            this.voxy$tryCreateRenderer();
         }
+    }
+
+    @Inject(method = "tick", at = @At("HEAD"))
+    private void voxy$createRendererWhenPlayerReady(CallbackInfo ci) {
+        if (this.renderer == null && this.level != null) {
+            this.voxy$tryCreateRenderer();
+        }
+    }
+
+    @Unique
+    private void voxy$tryCreateRenderer() {
+        if (this.voxy$rendererCreationFailed) {
+            return;
+        }
+        // Defer until the local player exists (multiplayer join sets level before player spawns)
+        if (Minecraft.getInstance().player == null) {
+            return;
+        }
+        this.createRenderer();
     }
 
     @Inject(method = "setLevel", at = @At("HEAD"))
     private void voxy$captureSetWorld(ClientLevel world, CallbackInfo ci) {
         if (this.level != world) {
             this.shutdownRenderer();
+            this.voxy$rendererCreationFailed = false;
         }
     }
 
@@ -86,12 +108,9 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
         try {
             this.renderer = new VoxyRenderSystem(world, instance.getServiceManager());
         } catch (RuntimeException e) {
-            // MC 1.21.1 NeoForge: Iris shader integration excluded - irisShaderPackEnabled() returns false
-            if (false) {
-                // IrisUtil.disableIrisShaders();
-            } else {
-                throw e;
-            }
+            this.voxy$rendererCreationFailed = true;
+            Logger.error("Failed to initialize Voxy renderer for this world. LOD rendering disabled for this session.", e);
+            return;
         }
         instance.updateDedicatedThreads();
     }

@@ -17,7 +17,7 @@ This is a **NeoForge 1.21.1 port** of the Voxy mod (originally Fabric).
 ```
 .reference/
 ├── minecraft/1.21.1/decompiled/    # MC 1.21.1 decompiled sources
-├── sodium/0.6.13/                   # Sodium bytecode/sources
+├── sodium/0.8.12/                   # Sodium bytecode/sources
 └── [other reference repos]
 ```
 
@@ -41,9 +41,9 @@ Before modifying any file:
 ### 3. Dependency Versions
 
 **Current validated versions** (for NeoForge 1.21.1):
-- NeoForge: 21.1.217
+- NeoForge: 21.1.228
 - Minecraft: 1.21.1
-- Sodium: mc1.21.1-0.6.13-neoforge
+- Sodium: mc1.21.1-0.8.12-neoforge (compile: net.caffeinemc:sodium-neoforge-mod:0.8.12+mc1.21.1)
 - Lithium: mc1.21.1-0.15.1-neoforge
 - Forgified Fabric API: Check Modrinth/CurseForge for correct 1.21.1 version
 

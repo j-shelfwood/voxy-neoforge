@@ -49,7 +49,7 @@ public class ShaderLoader {
         String processed = "\n" + shaderSource + "\n//beans";
 
         // Apply Sodium's shader constants processing (handles #define etc.)
-        processed = ShaderParser.parseShader(processed, ShaderConstants.builder().build());
+        processed = ShaderParser.parseShader(processed, ShaderConstants.builder().build()).src();
 
         // Normalize line endings and strip original #version (upstream behavior)
         processed = processed.replaceAll("\r\n", "\n");

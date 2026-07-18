@@ -9,6 +9,7 @@
     "minecraft.MixinClientCommonPacketListenerImpl",
     "minecraft.MixinClientLevel",
     "minecraft.MixinClientPacketListener",
+    "minecraft.MixinGameRenderer",
     "minecraft.MixinFogRenderer",
     "minecraft.MixinLayerLightSectionStorage",
     "minecraft.MixinLevelRenderer",
