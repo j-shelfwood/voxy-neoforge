@@ -43,7 +43,7 @@ Before modifying any file:
 **Current validated versions** (for NeoForge 1.21.1):
 - NeoForge: 21.1.217
 - Minecraft: 1.21.1
-- Sodium: mc1.21.1-0.6.13-neoforge
+- Sodium: mc1.21.1-0.6.13-neoforge (runtime also supports the 0.8.x line; build compiles against 0.6.13)
 - Lithium: mc1.21.1-0.15.1-neoforge
 - Forgified Fabric API: Check Modrinth/CurseForge for correct 1.21.1 version
 

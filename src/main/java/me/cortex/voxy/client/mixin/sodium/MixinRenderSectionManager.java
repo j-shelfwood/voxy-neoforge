@@ -24,6 +24,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Group;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -37,10 +38,26 @@ public class MixinRenderSectionManager {
 
     @Shadow @Final private ChunkBuilder builder;
 
-    // Sodium 0.6.13: Constructor signature is (ClientLevel, int, CommandList)
-    // SortBehavior parameter removed in Sodium 0.6.x
-    @Inject(method = "<init>", at = @At("TAIL"))
+    // The constructor signature differs between Sodium generations:
+    //   0.6.x: (ClientLevel, int, CommandList)
+    //   0.8.x: (ClientLevel, int, SortBehavior, CommandList)  (SortBehavior restored)
+    // One descriptor-qualified variant per shape, require = 0 each; the @Group makes
+    // "exactly one applied" a hard invariant, so an unknown future Sodium fails loudly
+    // at apply time instead of silently leaving bottomSectionY at 0.
+    @Group(name = "voxy$rsmCtor", min = 1, max = 1)
+    @Inject(method = "<init>(Lnet/minecraft/client/multiplayer/ClientLevel;ILnet/caffeinemc/mods/sodium/client/gl/device/CommandList;)V", at = @At("TAIL"), require = 0)
     private void voxy$resetChunkTracker(ClientLevel level, int renderDistance, CommandList commandList, CallbackInfo ci) {
+        this.voxy$onConstructed(level);
+    }
+
+    @Group(name = "voxy$rsmCtor", min = 1, max = 1)
+    @Inject(method = "<init>(Lnet/minecraft/client/multiplayer/ClientLevel;ILnet/caffeinemc/mods/sodium/client/render/chunk/translucent_sorting/SortBehavior;Lnet/caffeinemc/mods/sodium/client/gl/device/CommandList;)V", at = @At("TAIL"), require = 0)
+    private void voxy$resetChunkTrackerSodium08(ClientLevel level, int renderDistance, SortBehavior sortBehavior, CommandList commandList, CallbackInfo ci) {
+        this.voxy$onConstructed(level);
+    }
+
+    @Unique
+    private void voxy$onConstructed(ClientLevel level) {
         if (level.levelRenderer != null) {
             var system = ((IGetVoxyRenderSystem)(level.levelRenderer)).getVoxyRenderSystem();
             if (system != null) {
