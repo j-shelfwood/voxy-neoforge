@@ -1,12 +1,15 @@
 package me.cortex.voxy.client.core.gl.shader;
 
 
+import me.cortex.voxy.common.Logger;
 import net.caffeinemc.mods.sodium.client.gl.shader.ShaderConstants;
 import net.caffeinemc.mods.sodium.client.gl.shader.ShaderParser;
 import org.apache.commons.io.IOUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -25,6 +28,43 @@ import java.util.regex.Pattern;
  */
 public class ShaderLoader {
     private static final Pattern IMPORT_PATTERN = Pattern.compile("#import <(?<namespace>.*):(?<path>.*)>");
+
+    // Sodium 0.8 changed ShaderParser.parseShader's return type from String to the
+    // ParsedShader record (same parameters, source now behind .src()). Resolve the
+    // method reflectively so one build runs on both Sodium 0.6.x and 0.8.x.
+    private static final MethodHandle PARSE_SHADER;
+    private static final MethodHandle PARSED_SHADER_SRC; // non-null only on Sodium 0.8+
+
+    static {
+        MethodHandle parse;
+        MethodHandle src = null;
+        try {
+            var method = ShaderParser.class.getMethod("parseShader", String.class, ShaderConstants.class);
+            parse = MethodHandles.lookup().unreflect(method);
+            if (method.getReturnType() != String.class) {
+                src = MethodHandles.lookup().unreflect(method.getReturnType().getMethod("src"));
+            }
+        } catch (ReflectiveOperationException e) {
+            // Log before throwing: later touches of this class throw NoClassDefFoundError
+            // without the cause, so this line is the one durable diagnostic.
+            Logger.error("Failed to resolve Sodium's ShaderParser.parseShader - incompatible Sodium version?", e);
+            throw new ExceptionInInitializerError(e);
+        }
+        PARSE_SHADER = parse;
+        PARSED_SHADER_SRC = src;
+    }
+
+    /** Calls Sodium's shader preprocessor, unwrapping the 0.8 ParsedShader record when present. */
+    private static String parseWithSodium(String source, ShaderConstants constants) {
+        try {
+            Object out = PARSE_SHADER.invoke(source, constants);
+            return PARSED_SHADER_SRC == null ? (String) out : (String) PARSED_SHADER_SRC.invoke(out);
+        } catch (RuntimeException | Error e) {
+            throw e; // preserve pre-patch propagation exactly
+        } catch (Throwable t) {
+            throw new RuntimeException("Sodium shader preprocessing failed", t);
+        }
+    }
 
     /**
      * Parse and load a shader, matching upstream Voxy behavior.
@@ -49,7 +89,7 @@ public class ShaderLoader {
         String processed = "\n" + shaderSource + "\n//beans";
 
         // Apply Sodium's shader constants processing (handles #define etc.)
-        processed = ShaderParser.parseShader(processed, ShaderConstants.builder().build());
+        processed = parseWithSodium(processed, ShaderConstants.builder().build());
 
         // Normalize line endings and strip original #version (upstream behavior)
         processed = processed.replaceAll("\r\n", "\n");

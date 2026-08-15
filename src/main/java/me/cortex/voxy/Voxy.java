@@ -48,6 +48,11 @@ public class Voxy {
         }
 
         try {
+            // SodiumOptionsAPI (and our page behind it) target Sodium 0.6's options GUI.
+            // Probe for it first: on Sodium 0.8+ those classes are gone, and registering
+            // anyway would defer the NoClassDefFoundError to when the Video Settings
+            // screen opens - outside any of our try/catch blocks.
+            Class.forName("net.caffeinemc.mods.sodium.client.gui.options.OptionPage");
             // Load and invoke the integration class only when we know the API is present
             // This prevents NoClassDefFoundError when SodiumOptionsAPI is not installed
             Class<?> sodiumOptionsClass = Class.forName("me.cortex.voxy.client.config.VoxySodiumOptions");
