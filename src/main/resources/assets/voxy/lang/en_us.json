@@ -52,6 +52,9 @@
   "voxy.config.general.lod_boundary_buffer": "LOD boundary fine-tune (blocks)",
   "voxy.config.general.lod_boundary_buffer.tooltip": "Fine-tunes the depth mask boundary in blocks. Positive = shrink mask (LODs bleed inward, hides gap). Negative = expand mask. 0 = exact match. Live update — adjust while flying to find the sweet spot.",
 
+  "voxy.config.general.section_visibility_cull_overscan": "Section cull overscan (blocks)",
+  "voxy.config.general.section_visibility_cull_overscan.tooltip": "Pads per-section visibility culling outward in world blocks. Higher values reduce screen-edge pop-in while panning, at the cost of some extra offscreen rendering.",
+
   "voxy.config.general.earth_curve_ratio": "Earth curvature ratio",
   "voxy.config.general.earth_curve_ratio.tooltip": "0 = flat world, 50-5000 = curvature strength (higher = smaller planet)"
 }

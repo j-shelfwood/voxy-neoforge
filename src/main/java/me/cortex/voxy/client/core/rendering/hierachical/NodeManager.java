@@ -4,6 +4,7 @@ import it.unimi.dsi.fastutil.ints.IntConsumer;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
 import me.cortex.voxy.client.core.gl.GlBuffer;
@@ -178,9 +179,131 @@ public class NodeManager {
         this.recurseRemoveNode(pos);
     }
 
+    public boolean hasTopLevelNode(long pos) {
+        return this.topLevelNodes.contains(pos);
+    }
+
+    public record NodeState(
+            boolean exists,
+            boolean request,
+            boolean topLevelRoot,
+            boolean leaf,
+            boolean inner,
+            int lodLevel,
+            boolean hasMesh,
+            boolean meshInFlight,
+            boolean childRequestInFlight,
+            int childExistenceMask
+    ) {}
+
+    public NodeState getNodeState(long pos) {
+        int nodeId = this.activeSectionMap.get(pos);
+        if (nodeId == -1) {
+            return new NodeState(false, false, false, false, false, -1, false, false, false, 0);
+        }
+        int type = nodeId & NODE_TYPE_MSK;
+        if (type == NODE_TYPE_REQUEST) {
+            return new NodeState(true, true, this.topLevelNodes.contains(pos), false, false,
+                    WorldEngine.getLevel(pos), false, false, false, 0);
+        }
+        int level = WorldEngine.getLevel(pos);
+        int node = nodeId & NODE_ID_MSK;
+        int geometry = this.nodeData.getNodeGeometry(node);
+        return new NodeState(
+                true,
+                false,
+                this.topLevelNodes.contains(pos),
+                type == NODE_TYPE_LEAF,
+                type == NODE_TYPE_INNER,
+                level,
+                geometry != NULL_GEOMETRY_ID,
+                this.nodeData.isNodeGeometryInFlight(node),
+                this.nodeData.isNodeRequestInFlight(node),
+                Byte.toUnsignedInt(this.nodeData.getNodeChildExistence(node))
+        );
+    }
 
     IntOpenHashSet getTopLevelNodeIds() {
         return this.topLevelNodeIds;
+    }
+
+    public int getRequestPhaseLevel(long pos) {
+        NodeState state = this.getNodeState(pos);
+        if (!state.exists() || state.request()) {
+            return Integer.MIN_VALUE;
+        }
+        if (state.leaf()) {
+            if (state.lodLevel() == 0 || state.childRequestInFlight() || !state.hasMesh()) {
+                return Integer.MIN_VALUE;
+            }
+            if (state.childExistenceMask() == 0) {
+                return Integer.MIN_VALUE;
+            }
+            return state.lodLevel() - 1;
+        }
+        if (state.meshInFlight()) {
+            return Integer.MIN_VALUE;
+        }
+        return state.lodLevel();
+    }
+
+    public boolean isRequestableAtPhase(long pos, int phaseLevel) {
+        return this.getRequestPhaseLevel(pos) == phaseLevel;
+    }
+
+    public LongArrayList snapshotTopLevelRoots() {
+        LongArrayList out = new LongArrayList(this.topLevelNodes.size());
+        for (long pos : this.topLevelNodes) {
+            out.add(pos);
+        }
+        return out;
+    }
+
+    public void getExistingChildren(long pos, LongArrayList out) {
+        out.clear();
+        int nodeId = this.activeSectionMap.get(pos);
+        if (nodeId == -1 || (nodeId & NODE_TYPE_MSK) == NODE_TYPE_REQUEST) {
+            return;
+        }
+        int node = nodeId & NODE_ID_MSK;
+        int childExistence = Byte.toUnsignedInt(this.nodeData.getNodeChildExistence(node));
+        for (int childIdx = 0; childIdx < 8; childIdx++) {
+            if ((childExistence & (1 << childIdx)) == 0) {
+                continue;
+            }
+            out.add(makeChildPos(pos, childIdx));
+        }
+    }
+
+    public int countRootsCompleteAtPhase(int phaseLevel) {
+        int complete = 0;
+        for (long rootPos : this.topLevelNodes) {
+            if (this.isNodeCompleteAtPhase(rootPos, phaseLevel)) {
+                complete++;
+            }
+        }
+        return complete;
+    }
+
+    private boolean isNodeCompleteAtPhase(long pos, int phaseLevel) {
+        NodeState state = this.getNodeState(pos);
+        if (!state.exists() || state.request()) {
+            return false;
+        }
+        if (state.lodLevel() <= phaseLevel) {
+            return state.hasMesh();
+        }
+        LongArrayList children = new LongArrayList(8);
+        this.getExistingChildren(pos, children);
+        if (children.isEmpty()) {
+            return state.hasMesh();
+        }
+        for (int i = 0; i < children.size(); i++) {
+            if (!this.isNodeCompleteAtPhase(children.getLong(i), phaseLevel)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     //==================================================================================================================
@@ -1423,6 +1546,10 @@ public class NodeManager {
 
     public int getCurrentMaxNodeId() {
         return this.nodeData.getEndNodeId();
+    }
+
+    public int getActiveNodeRequestCount() {
+        return this.activeNodeRequestCount;
     }
 
 

@@ -38,6 +38,14 @@ BEGIN {
   upload_max_glfinish_stalls = 0
   world_cache_perf_lines = 0
   world_min_hit_pct = 0
+  traversal_perf_lines = 0
+  traversal_max_request_budget = 0
+  traversal_max_mesh_queue = 0
+  traversal_max_top_nodes = 0
+  chunk_mask_perf_lines = 0
+  chunk_mask_max_tracked = 0
+  chunk_mask_max_pending_add = 0
+  chunk_mask_max_pending_remove = 0
 }
 
 function num_after_equals(token,    a) {
@@ -148,6 +156,34 @@ function print_header(title) {
   }
 }
 
+/VOXY_PERF traversal/ {
+  traversal_perf_lines++
+  n = split($0, toks, /[[:space:]]+/)
+  for (i = 1; i <= n; i++) {
+    if (toks[i] ~ /^request_budget=/) {
+      v = num_after_equals(toks[i]); if (v > traversal_max_request_budget) traversal_max_request_budget = v
+    } else if (toks[i] ~ /^mesh_queue=/) {
+      v = num_after_equals(toks[i]); if (v > traversal_max_mesh_queue) traversal_max_mesh_queue = v
+    } else if (toks[i] ~ /^top_node_count=/) {
+      v = num_after_equals(toks[i]); if (v > traversal_max_top_nodes) traversal_max_top_nodes = v
+    }
+  }
+}
+
+/VOXY_PERF chunk_mask/ {
+  chunk_mask_perf_lines++
+  n = split($0, toks, /[[:space:]]+/)
+  for (i = 1; i <= n; i++) {
+    if (toks[i] ~ /^tracked_sections=/) {
+      v = num_after_equals(toks[i]); if (v > chunk_mask_max_tracked) chunk_mask_max_tracked = v
+    } else if (toks[i] ~ /^pending_add=/) {
+      v = num_after_equals(toks[i]); if (v > chunk_mask_max_pending_add) chunk_mask_max_pending_add = v
+    } else if (toks[i] ~ /^pending_remove=/) {
+      v = num_after_equals(toks[i]); if (v > chunk_mask_max_pending_remove) chunk_mask_max_pending_remove = v
+    }
+  }
+}
+
 END {
   print "Voxy Log Triage"
   print "  file: " FILENAME
@@ -174,6 +210,12 @@ END {
   print "  upload_max_backpressure: " (upload_max_backpressure + 0)
   print "  upload_max_glfinish_stalls: " (upload_max_glfinish_stalls + 0)
   print "  world_min_hit_pct: " (world_min_hit_pct + 0)
+  print "  traversal_max_request_budget: " (traversal_max_request_budget + 0)
+  print "  traversal_max_mesh_queue: " (traversal_max_mesh_queue + 0)
+  print "  traversal_max_top_nodes: " (traversal_max_top_nodes + 0)
+  print "  chunk_mask_max_tracked_sections: " (chunk_mask_max_tracked + 0)
+  print "  chunk_mask_max_pending_add: " (chunk_mask_max_pending_add + 0)
+  print "  chunk_mask_max_pending_remove: " (chunk_mask_max_pending_remove + 0)
 
   print_header("Implementation Map")
   print "  Missing model summary -> src/main/java/me/cortex/voxy/client/core/rendering/building/RenderDataFactory.java"
@@ -181,6 +223,8 @@ END {
   print "  Large amount of copies -> src/main/java/me/cortex/voxy/client/core/rendering/hierachical/AsyncNodeManager.java"
   print "  VOXY_PERF async_node -> src/main/java/me/cortex/voxy/client/core/rendering/hierachical/AsyncNodeManager.java"
   print "  VOXY_PERF upload_stream -> src/main/java/me/cortex/voxy/client/core/rendering/util/UploadStream.java"
+  print "  VOXY_PERF traversal -> src/main/java/me/cortex/voxy/client/core/rendering/hierachical/HierarchicalOcclusionTraverser.java"
+  print "  VOXY_PERF chunk_mask -> src/main/java/me/cortex/voxy/client/core/rendering/ChunkBoundRenderer.java"
   print "  GPU wait fail -> src/main/java/me/cortex/voxy/client/core/rendering/section/geometry/BasicSectionGeometryData.java"
 
   print_header("Recommended Actions")
@@ -217,6 +261,20 @@ END {
     print "       Action: inspect UploadStream thresholds and staging sizes."
   } else {
     print "  [A5] Upload stream looks healthy (no backpressure/stalls/pending copies)."
+  }
+
+  if (traversal_perf_lines > 0) {
+    print "  [A6] Traversal telemetry present."
+    print "       Action: compare request_budget, top_node_count, and mesh_queue growth during movement spikes."
+  } else {
+    print "  [A6] No traversal telemetry detected."
+  }
+
+  if (chunk_mask_perf_lines > 0) {
+    print "  [A7] Chunk mask telemetry present."
+    print "       Action: verify tracked_sections and pending add/remove spikes against chunk transition churn."
+  } else {
+    print "  [A7] No chunk mask telemetry detected."
   }
 }
 ' "$LOG_FILE"

@@ -17,6 +17,7 @@ layout(binding = SCENE_UNIFORM_BINDING, std140) uniform SceneUniform {
     uint renderQueueMaxSize;
     uint frameId;
     uint requestQueueSize;
+    uint currentPhaseLevel;
     float renderDistance;
 };
 
@@ -131,7 +132,7 @@ void traverse(in UnpackedNode node) {
         //It is visible, TODO: maybe do a more detailed hiz test? (or make it so that )
 
         //Only decend if not a root node
-        if (node.lodLevel!=0 && shouldDecend()) {
+        if (node.lodLevel > currentPhaseLevel && shouldDecend()) {
             if (hasChildren(node)) {
                 //printf("A");
                 enqueueChildren(node);
@@ -145,7 +146,7 @@ void traverse(in UnpackedNode node) {
                 bool shouldRenderSelf = renderDistance<0.0f;
                 if (!shouldRenderSelf) {
                     vec3 far = furthestPointToCamera(node);
-                    shouldRenderSelf = (far.x*far.x+far.z*far.z+(16*16*16))<=renderDistance;//the +16*16 is to add some buffer room
+                    shouldRenderSelf = (far.x*far.x+far.z*far.z+(16*16*16))<=renderDistance;// buffer room for handoff stability
                 }
 
                 if (shouldRenderSelf) {

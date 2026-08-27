@@ -2,6 +2,7 @@ package me.cortex.voxy.client;
 
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.config.VoxyNeoForgeConfig;
+import me.cortex.voxy.client.debug.RenderPathDebug;
 import me.cortex.voxy.client.hud.VoxyLoadingHud;
 import me.cortex.voxy.client.compat.IrisCompatManager;
 import net.minecraft.client.renderer.FogRenderer;
@@ -14,44 +15,31 @@ import net.neoforged.neoforge.event.GameShuttingDownEvent;
 
 /**
  * Client event handlers for Voxy on NeoForge.
- *
- * Handles fog rendering to push fog to infinity so Voxy LODs render
- * without a fog wall at vanilla render distance.
  */
 @EventBusSubscriber(modid = "voxy", value = Dist.CLIENT)
 public class VoxyClientEvents {
 
     /**
-     * Push terrain fog to infinity when Voxy is enabled.
+     * Observe the final fog state after vanilla setup completes.
      *
-     * This event fires AFTER setupFog() completes but BEFORE terrain renders.
-     * By setting fog distances to very large values and cancelling the event,
-     * we prevent the fog wall from appearing at vanilla render distance.
-     *
-     * Both vanilla terrain and Voxy LODs will render without fog-based distance fading.
-     * This is the same approach used by Distant Horizons.
+     * The actual non-shader override now lives in MixinFogRenderer so that
+     * vanilla terrain, sky, and Voxy all consume one shared fog policy.
      */
     @SubscribeEvent
     public static void onRenderFog(ViewportEvent.RenderFog event) {
-        // Do not override fog while a shader pack is active.
-        // Shader packs manage fog/cloud composition internally; forcing far fog here
-        // can cause skybox/cloud artifacts during camera movement.
-        if (IrisCompatManager.isShaderPackEnabled()) {
+        boolean shaderPackEnabled = IrisCompatManager.isShaderPackEnabled();
+        boolean voxyRenderingEnabled = VoxyConfig.CONFIG.isEnabled() && VoxyNeoForgeConfig.isRenderingEnabled();
+
+        if (shaderPackEnabled) {
+            RenderPathDebug.logFog("neoforge_event", "shader_pack_active", true,
+                    voxyRenderingEnabled, String.valueOf(event.getMode()),
+                    event.getNearPlaneDistance(), event.getFarPlaneDistance());
             return;
         }
-        // Only modify terrain fog when Voxy is enabled and rendering
-        if (event.getMode() == FogRenderer.FogMode.FOG_TERRAIN
-                && VoxyConfig.CONFIG.isEnabled()
-                && VoxyNeoForgeConfig.isRenderingEnabled()) {
 
-            // Push fog to very large values (not MAX_VALUE to avoid shader math issues)
-            // This removes the fog wall at vanilla render distance
-            event.setNearPlaneDistance(999999.0f);
-            event.setFarPlaneDistance(9999999.0f);
-
-            // MUST cancel for changes to take effect (per NeoForge docs)
-            event.setCanceled(true);
-        }
+        RenderPathDebug.logFog("neoforge_event", "observe_only", false,
+                voxyRenderingEnabled, String.valueOf(event.getMode()),
+                event.getNearPlaneDistance(), event.getFarPlaneDistance());
     }
 
     /**

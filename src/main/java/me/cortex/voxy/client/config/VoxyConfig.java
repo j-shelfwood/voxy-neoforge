@@ -80,6 +80,10 @@ public class VoxyConfig {
         return VoxyNeoForgeConfig.getLodBoundaryBuffer();
     }
 
+    public int getSectionVisibilityCullOverscan() {
+        return VoxyNeoForgeConfig.getSectionVisibilityCullOverscan();
+    }
+
     // ========== Delegated Setters ==========
 
     public void setEnabled(boolean value) {
@@ -140,6 +144,10 @@ public class VoxyConfig {
 
     public void setLodBoundaryBuffer(int value) {
         VoxyNeoForgeConfig.setLodBoundaryBuffer(value);
+    }
+
+    public void setSectionVisibilityCullOverscan(int value) {
+        VoxyNeoForgeConfig.setSectionVisibilityCullOverscan(value);
     }
 
     // ========== Save ==========

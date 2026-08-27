@@ -66,7 +66,7 @@ public class NodeCleaner {
     int visibilityId = 0;
 
     private static final boolean ENABLE_GEOMETRY_CLEANER =
-            System.getProperty("voxy.nodeCleanerEnabled", "false").equalsIgnoreCase("true");
+            System.getProperty("voxy.nodeCleanerEnabled", "true").equalsIgnoreCase("true");
     private static final boolean ENABLE_MOTION_GUARD =
             System.getProperty("voxy.nodeCleanerMotionGuard", "true").equalsIgnoreCase("true");
     private static final double MOTION_GUARD_BLOCKS_PER_FRAME =
@@ -78,7 +78,7 @@ public class NodeCleaner {
     private static final int CLEAN_INTERVAL_FRAMES =
             Integer.parseInt(System.getProperty("voxy.nodeCleanerInterval", "1"));
     private static final long CLEAN_REMAINING_GEOMETRY_THRESHOLD_BYTES =
-            Long.parseLong(System.getProperty("voxy.nodeCleanerMinRemainingBytes", "100000000"));
+            Long.parseLong(System.getProperty("voxy.nodeCleanerMinRemainingBytes", "402653184"));
     private static final boolean DEFER_ON_UPLOAD_PRESSURE =
             System.getProperty("voxy.nodeCleanerDeferOnUploadPressure", "true").equalsIgnoreCase("true");
 

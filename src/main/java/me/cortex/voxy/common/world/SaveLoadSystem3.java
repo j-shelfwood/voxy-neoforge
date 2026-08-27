@@ -9,6 +9,7 @@ import org.lwjgl.system.MemoryUtil;
 
 public class SaveLoadSystem3 {
     public static final int STORAGE_VERSION = 0;
+    public static final int BIGGEST_SERIALIZED_SECTION_SIZE = 32 * 32 * 32 * 8 * 2 + 8;
 
     private record SerializationCache(Long2ShortOpenHashMap lutMapCache, MemoryBuffer memoryBuffer) {
         public SerializationCache() {

@@ -31,7 +31,7 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
     private void cancelThingie(ChunkRenderMatrices matrices, CommandList commandList, ChunkRenderListIterable renderLists, TerrainRenderPass renderPass, CameraTransform camera, CallbackInfo ci) {
         if (VoxyClient.disableEmbeddiumChunkRender()) {
             super.begin(renderPass);
-            this.doRender(matrices, renderPass, camera);
+            this.doRender(matrices, renderLists, renderPass, camera);
             super.end(renderPass);
             ci.cancel();
         }
@@ -39,11 +39,11 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
 
     @Inject(method = "render", at = @At(value = "INVOKE", target = "Lorg/embeddedt/embeddium/impl/render/chunk/ShaderChunkRenderer;end(Lorg/embeddedt/embeddium/impl/render/chunk/terrain/TerrainRenderPass;)V", shift = At.Shift.BEFORE))
     private void injectRender(ChunkRenderMatrices matrices, CommandList commandList, ChunkRenderListIterable renderLists, TerrainRenderPass renderPass, CameraTransform camera, CallbackInfo ci) {
-        this.doRender(matrices, renderPass, camera);
+        this.doRender(matrices, renderLists, renderPass, camera);
     }
 
     @Unique
-    private void doRender(ChunkRenderMatrices matrices, TerrainRenderPass renderPass, CameraTransform camera) {
+    private void doRender(ChunkRenderMatrices matrices, ChunkRenderListIterable renderLists, TerrainRenderPass renderPass, CameraTransform camera) {
         if (renderPass == DefaultTerrainRenderPasses.CUTOUT) {
             var renderer = ((IGetVoxyRenderSystem) Minecraft.getInstance().levelRenderer).getVoxyRenderSystem();
             if (renderer != null) {
@@ -57,6 +57,7 @@ public abstract class MixinDefaultChunkRenderer extends ShaderChunkRenderer {
                 if (me.cortex.voxy.client.compat.IrisCompatManager.isShadowActive()) {
                     return;
                 }
+                renderer.chunkBoundRenderer.syncFromVisibleRenderLists(renderLists);
                 // Always call setupViewport() to refresh GL state (framebuffer ID, viewport dims,
                 // matrices) from actual GPU state each frame.
                 Viewport<?> viewport = renderer.setupViewport(matrices.projection(), matrices.modelView(), camera.x, camera.y, camera.z);

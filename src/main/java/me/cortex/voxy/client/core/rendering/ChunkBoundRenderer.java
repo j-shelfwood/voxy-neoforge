@@ -1,8 +1,7 @@
 package me.cortex.voxy.client.core.rendering;
 
-import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.core.AbstractRenderPipeline;
 import me.cortex.voxy.client.core.gl.GlBuffer;
 import me.cortex.voxy.client.core.gl.GlVertexArray;
@@ -14,6 +13,11 @@ import me.cortex.voxy.client.core.rendering.util.SharedIndexBuffer;
 import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.common.Logger;
 import net.minecraft.client.Minecraft;
+import net.minecraft.core.SectionPos;
+import org.embeddedt.embeddium.impl.render.chunk.lists.ChunkRenderList;
+import org.embeddedt.embeddium.impl.render.chunk.lists.ChunkRenderListIterable;
+import org.embeddedt.embeddium.impl.render.chunk.region.RenderRegion;
+import org.embeddedt.embeddium.impl.util.iterator.ByteIterator;
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector3i;
@@ -29,26 +33,28 @@ import static org.lwjgl.opengl.GL30C.*;
 import static org.lwjgl.opengl.GL31.glDrawElementsInstanced;
 import static org.lwjgl.opengl.GL42.glDrawElementsInstancedBaseInstance;
 
-// Renders an AABB around each built chunk section into a depth mask.
-// LOD fragments are discarded wherever MC geometry exists (reverse depth test).
-// Sections enter/leave the mask when Embeddium transitions their built state,
-// mirroring the upstream Sodium approach in MixinRenderSectionManager.
+// Renders a depth-only AABB mask for the chunk sections Embeddium actually decided to draw this frame.
+// This keeps the LOD handoff aligned to Embeddium's real visible geometry instead of approximating it from
+// section build-state transitions or chunk-tracking heuristics.
 public class ChunkBoundRenderer {
-    private static final int INIT_MAX_CHUNK_COUNT = 1 << 12;
-    private GlBuffer chunkPosBuffer = new GlBuffer(INIT_MAX_CHUNK_COUNT * 8); // ivec2 per section
+    private static final int INIT_MAX_SPAN_COUNT = 1 << 12;
+    private static final int PERF_LOG_INTERVAL_FRAMES =
+            Math.max(1, Integer.getInteger("voxy.chunkMaskPerfLogIntervalFrames", 300));
+
+    private GlBuffer chunkPosBuffer = new GlBuffer(INIT_MAX_SPAN_COUNT * 16L); // ivec4 per vertical span
     private final GlBuffer uniformBuffer = new GlBuffer(128);
-    private final Long2IntOpenHashMap chunk2idx = new Long2IntOpenHashMap(INIT_MAX_CHUNK_COUNT);
-    private long[] idx2chunk = new long[INIT_MAX_CHUNK_COUNT];
+    private final LongOpenHashSet sections = new LongOpenHashSet(INIT_MAX_SPAN_COUNT);
+    private final LongOpenHashSet frameSections = new LongOpenHashSet(INIT_MAX_SPAN_COUNT);
+    private final Long2LongOpenHashMap columnMasks = new Long2LongOpenHashMap(INIT_MAX_SPAN_COUNT);
+    private int spanCount;
     private final Shader rasterShader;
-
-    private final LongOpenHashSet addQueue = new LongOpenHashSet();
-    private final LongOpenHashSet remQueue = new LongOpenHashSet();
-
     private final AbstractRenderPipeline pipeline;
     private volatile boolean freed;
+    private int perfLogFrameCounter;
+    private boolean spansDirty = true;
 
     public ChunkBoundRenderer(AbstractRenderPipeline pipeline) {
-        this.chunk2idx.defaultReturnValue(-1);
+        this.columnMasks.defaultReturnValue(0L);
         this.pipeline = pipeline;
 
         String vert = ShaderLoader.parse("voxy:chunkoutline/outline.vsh");
@@ -65,73 +71,73 @@ public class ChunkBoundRenderer {
                 .ssbo(1, this.chunkPosBuffer);
     }
 
-    public void addSection(long pos) {
+    public void syncFromVisibleRenderLists(ChunkRenderListIterable renderLists) {
         if (this.freed) {
             return;
         }
-        if (!this.remQueue.remove(pos)) {
-            this.addQueue.add(pos);
-        }
-    }
 
-    public void removeSection(long pos) {
-        if (this.freed) {
+        this.frameSections.clear();
+        for (var iterator = renderLists.iterator(false); iterator.hasNext(); ) {
+            ChunkRenderList renderList = iterator.next();
+            RenderRegion region = renderList.getRegion();
+            ByteIterator sectionIterator = renderList.sectionsWithGeometryIterator(false);
+            if (sectionIterator == null) {
+                continue;
+            }
+            while (sectionIterator.hasNext()) {
+                var section = region.getSection(sectionIterator.nextByteAsInt());
+                if (section == null) {
+                    continue;
+                }
+                this.frameSections.add(SectionPos.asLong(section.getChunkX(), section.getChunkY(), section.getChunkZ()));
+            }
+        }
+
+        if (sameSectionSet(this.sections, this.frameSections)) {
             return;
         }
-        if (!this.addQueue.remove(pos)) {
-            this.remQueue.add(pos);
-        }
+
+        this.sections.clear();
+        this.sections.addAll(this.frameSections);
+        this.rebuildColumnMasks();
+        this.spansDirty = true;
     }
 
     public void render(Viewport<?> viewport) {
         if (this.freed) {
             return;
         }
-        if (!this.remQueue.isEmpty()) {
-            boolean wasEmpty = this.chunk2idx.isEmpty();
-            this.remQueue.forEach(this::_remPos);
-            this.remQueue.clear();
-            if (this.chunk2idx.isEmpty() && !wasEmpty) {
-                viewport.depthBoundingBuffer.clear(0);
-            }
-        }
-
-        if (this.chunk2idx.isEmpty() && this.addQueue.isEmpty()) return;
 
         viewport.depthBoundingBuffer.clear(0);
+        if (this.sections.isEmpty()) {
+            return;
+        }
 
         long ptr = UploadStream.INSTANCE.upload(this.uniformBuffer, 0, 128);
-        long matPtr = ptr; ptr += 4 * 4 * 4;
+        long matPtr = ptr;
+        ptr += 4 * 4 * 4;
 
-        final float vanillaRenderDistanceBlocks = Minecraft.getInstance().options.getEffectiveRenderDistance() * 16.0f;
-        final float offsetBlocks = VoxyConfig.CONFIG.getRenderDistanceOffset() * 16.0f;
-        // Positive buffer shrinks mask inward to keep LODs visible slightly longer near the handoff edge.
-        final float boundaryBufferBlocks = VoxyConfig.CONFIG.getLodBoundaryBuffer();
-        final float renderDistance = Math.max(16.0f, vanillaRenderDistanceBlocks + offsetBlocks - boundaryBufferBlocks);
+        int bx = (int) (viewport.cameraX);
+        int by = (int) (viewport.cameraY);
+        int bz = (int) (viewport.cameraZ);
+        new Vector3i(bx, by, bz).getToAddress(ptr);
+        ptr += 4 * 4;
 
-        {
-            int sx = (int) (viewport.cameraX);
-            int sy = (int) (viewport.cameraY);
-            int sz = (int) (viewport.cameraZ);
-            new Vector3i(sx, sy, sz).getToAddress(ptr); ptr += 4 * 4;
+        var negInnerBlock = new Vector3f(
+                (float) (viewport.cameraX - bx),
+                (float) (viewport.cameraY - by),
+                (float) (viewport.cameraZ - bz));
+        negInnerBlock.getToAddress(ptr);
+        ptr += 4 * 3;
 
-            var negInnerSec = new Vector3f(
-                    (float) (viewport.cameraX - sx),
-                    (float) (viewport.cameraY - sy),
-                    (float) (viewport.cameraZ - sz));
-
-            negInnerSec.getToAddress(ptr); ptr += 4 * 3;
-            viewport.MVP.translate(negInnerSec.negate(), new Matrix4f()).getToAddress(matPtr);
-            MemoryUtil.memPutFloat(ptr, renderDistance);
-        }
+        viewport.MVP.translate(negInnerBlock.negate(), new Matrix4f()).getToAddress(matPtr);
+        MemoryUtil.memPutFloat(ptr, Minecraft.getInstance().options.getEffectiveRenderDistance() * 16.0f);
         UploadStream.INSTANCE.commit();
 
-        {
-            glFrontFace(GL_CW);
-            glEnable(GL_CULL_FACE);
-            glEnable(GL_DEPTH_TEST);
-            glDepthFunc(GL_GREATER);
-        }
+        glFrontFace(GL_CW);
+        glEnable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_GREATER);
 
         glBindVertexArray(GlVertexArray.STATIC_VAO);
         viewport.depthBoundingBuffer.bind();
@@ -139,116 +145,170 @@ public class ChunkBoundRenderer {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, SharedIndexBuffer.INSTANCE_BB_BYTE.id());
         this.pipeline.bindUniforms();
 
-        int count = this.chunk2idx.size();
+        if (this.spansDirty) {
+            this.rebuildSpanBuffer();
+        }
+
+        int count = this.spanCount;
         if (count >= 32) {
             glDrawElementsInstanced(GL_TRIANGLES, 6 * 2 * 3 * 32, GL_UNSIGNED_BYTE, 0, count / 32);
         }
-        if (count % 32 != 0) {
+        if ((count % 32) != 0) {
             glDrawElementsInstancedBaseInstance(GL_TRIANGLES, 6 * 2 * 3 * (count % 32), GL_UNSIGNED_BYTE, 0, 1, (count / 32) * 32);
         }
 
-        {
-            glFrontFace(GL_CCW);
-            glDepthFunc(GL_LEQUAL);
-            glEnable(GL_CULL_FACE);
-            glEnable(GL_DEPTH_TEST);
-        }
+        glFrontFace(GL_CCW);
+        glDepthFunc(GL_LEQUAL);
+        glEnable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
 
-        if (!this.addQueue.isEmpty()) {
-            this.addQueue.forEach(this::_addPos);
-            this.addQueue.clear();
-            UploadStream.INSTANCE.commit();
+        this.maybeLogPerf(viewport);
+    }
+
+    private void rebuildColumnMasks() {
+        this.columnMasks.clear();
+        for (long pos : this.sections) {
+            int bit = sectionBit(SectionPos.y(pos));
+            if (bit < 0) {
+                continue;
+            }
+            long key = packChunkKey(SectionPos.x(pos), SectionPos.z(pos));
+            this.columnMasks.put(key, this.columnMasks.get(key) | (1L << bit));
         }
     }
 
-    private void _remPos(long pos) {
-        int idx = this.chunk2idx.remove(pos);
-        if (idx == -1) {
-            Logger.warn("Chunk not in map: " + pos);
+    private void ensureSpanCapacity(int requiredSpans) {
+        if ((requiredSpans * 16L) <= this.chunkPosBuffer.size()) {
             return;
         }
-        if (idx == this.chunk2idx.size()) {
-            return;
-        }
-        if (this.idx2chunk[idx] != pos) {
-            throw new IllegalStateException();
-        }
-        long ePos = this.idx2chunk[this.chunk2idx.size()];
-        if (this.chunk2idx.put(ePos, idx) == -1) {
-            throw new IllegalStateException();
-        }
-        this.idx2chunk[idx] = ePos;
-        this.put(idx, ePos);
-    }
-
-    private void _addPos(long pos) {
-        if (this.chunk2idx.containsKey(pos)) {
-            Logger.warn("Chunk already in map: " + pos);
-            return;
-        }
-        this.ensureSize1();
-
-        int idx = this.chunk2idx.size();
-        this.chunk2idx.put(pos, idx);
-        this.idx2chunk[idx] = pos;
-        this.put(idx, pos);
-    }
-
-    private void ensureSize1() {
-        if (this.chunk2idx.size() < this.idx2chunk.length) return;
         UploadStream.INSTANCE.commit();
 
-        int size = (int) (this.idx2chunk.length * 1.5);
+        int size = Math.max(requiredSpans, (int) ((this.chunkPosBuffer.size() / 16L) * 1.5));
         Logger.info("Resizing chunk position buffer to: " + size);
         var old = this.chunkPosBuffer;
-        this.chunkPosBuffer = new GlBuffer(size * 8L);
+        this.chunkPosBuffer = new GlBuffer(size * 16L);
         glCopyNamedBufferSubData(old.id, this.chunkPosBuffer.id, 0, 0, old.size());
         old.free();
-        var old2 = this.idx2chunk;
-        this.idx2chunk = new long[size];
-        System.arraycopy(old2, 0, this.idx2chunk, 0, old2.length);
         ((AutoBindingShader) this.rasterShader).ssbo(1, this.chunkPosBuffer);
     }
 
-    private void put(int idx, long pos) {
-        long ptr2 = UploadStream.INSTANCE.upload(this.chunkPosBuffer, 8L * idx, 8);
-        MemoryUtil.memPutInt(ptr2, (int) (pos & 0xFFFFFFFFL)); ptr2 += 4;
-        MemoryUtil.memPutInt(ptr2, (int) ((pos >>> 32) & 0xFFFFFFFFL));
+    private void rebuildSpanBuffer() {
+        int requiredSpans = 0;
+        for (Long2LongOpenHashMap.Entry entry : this.columnMasks.long2LongEntrySet()) {
+            requiredSpans += Long.bitCount(entry.getLongValue());
+        }
+        this.ensureSpanCapacity(requiredSpans);
+
+        int index = 0;
+        int baseSectionY = getMinSection();
+        for (Long2LongOpenHashMap.Entry entry : this.columnMasks.long2LongEntrySet()) {
+            long mask = entry.getLongValue();
+            if (mask == 0L) {
+                continue;
+            }
+
+            int x = unpackChunkX(entry.getLongKey());
+            int z = unpackChunkZ(entry.getLongKey());
+            int bit = 0;
+            while (bit < 64) {
+                if ((mask & (1L << bit)) == 0L) {
+                    bit++;
+                    continue;
+                }
+
+                int startBit = bit;
+                do {
+                    bit++;
+                } while (bit < 64 && (mask & (1L << bit)) != 0L);
+
+                this.putSpan(index++, x, z, baseSectionY + startBit, baseSectionY + bit);
+            }
+        }
+        this.spanCount = index;
+        this.spansDirty = false;
+    }
+
+    private void putSpan(int idx, int x, int z, int yMinSection, int yMaxSectionExclusive) {
+        long ptr = UploadStream.INSTANCE.upload(this.chunkPosBuffer, 16L * idx, 16);
+        MemoryUtil.memPutInt(ptr, x);
+        ptr += 4;
+        MemoryUtil.memPutInt(ptr, z);
+        ptr += 4;
+        MemoryUtil.memPutInt(ptr, yMinSection);
+        ptr += 4;
+        MemoryUtil.memPutInt(ptr, yMaxSectionExclusive);
+    }
+
+    private static boolean sameSectionSet(LongOpenHashSet a, LongOpenHashSet b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (long pos : a) {
+            if (!b.contains(pos)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static long packChunkKey(int x, int z) {
+        return (((long) x) << 32) | (z & 0xFFFFFFFFL);
+    }
+
+    private static int unpackChunkX(long key) {
+        return (int) (key >> 32);
+    }
+
+    private static int unpackChunkZ(long key) {
+        return (int) key;
+    }
+
+    private static int getMinSection() {
+        var level = Minecraft.getInstance().level;
+        return level != null ? level.getMinSection() : -64;
+    }
+
+    private static int sectionBit(int sectionY) {
+        int bit = sectionY - getMinSection();
+        return bit >= 0 && bit < 64 ? bit : -1;
     }
 
     public void reset() {
         if (this.freed) {
             return;
         }
-        this.chunk2idx.clear();
+        this.sections.clear();
+        this.frameSections.clear();
+        this.columnMasks.clear();
+        this.spanCount = 0;
+        this.spansDirty = true;
     }
 
-    /**
-     * Replay all currently-tracked section positions from {@code source} into this renderer.
-     * Called after a /voxy reload so the new ChunkBoundRenderer inherits the built-section
-     * mask from the old one without waiting for Embeddium to re-fire section-built events.
-     */
     public void replayFrom(ChunkBoundRenderer source) {
-        if (this.freed || source.freed) return;
-        int count = source.chunk2idx.size();
-        if (count == 0) return;
-        // idx2chunk[0..size-1] holds the canonical packed SectionPos longs.
-        for (int i = 0; i < count; i++) {
-            this.addSection(source.idx2chunk[i]);
+        if (this.freed || source.freed || source.sections.isEmpty()) {
+            return;
         }
-        Logger.info("[ChunkBoundRenderer] Replayed " + count + " built sections from previous renderer");
+        this.sections.clear();
+        this.sections.addAll(source.sections);
+        this.rebuildColumnMasks();
+        this.spansDirty = true;
+        Logger.info("[ChunkBoundRenderer] Replayed " + source.sections.size() + " visible sections from previous renderer");
     }
 
     public int getPendingAddCount() {
-        return this.addQueue.size();
+        return 0;
     }
 
     public int getPendingRemoveCount() {
-        return this.remQueue.size();
+        return 0;
     }
 
     public int getTrackedSectionCount() {
-        return this.chunk2idx.size();
+        return this.sections.size();
+    }
+
+    public int getTrackedSpanCount() {
+        return this.spanCount;
     }
 
     public void free() {
@@ -259,5 +319,19 @@ public class ChunkBoundRenderer {
         this.rasterShader.free();
         this.uniformBuffer.free();
         this.chunkPosBuffer.free();
+    }
+
+    private void maybeLogPerf(Viewport<?> viewport) {
+        if (++this.perfLogFrameCounter < PERF_LOG_INTERVAL_FRAMES) {
+            return;
+        }
+        this.perfLogFrameCounter = 0;
+        Logger.info(
+                "VOXY_PERF chunk_mask",
+                "tracked_sections=" + this.sections.size(),
+                "draw_spans=" + this.spanCount,
+                "camera=" + ((int) viewport.cameraX) + "," + ((int) viewport.cameraY) + "," + ((int) viewport.cameraZ),
+                "viewport=" + viewport.width + "x" + viewport.height
+        );
     }
 }

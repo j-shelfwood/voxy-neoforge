@@ -112,14 +112,14 @@ public class ModelBakerySubsystem {
             return;
         }
         // Fast path: already baked
-        if (this.factory.hasModelForBlockId(blockId)) {
+        if (!this.factory.needsModelBakeForBlockId(blockId)) {
             return;
         }
         boolean isNew = this.seenIds.add(blockId);
         if (!isNew) {
             // Some states can remain unbaked for a while (dependency ordering/modpack quirks).
             // Allow low-frequency re-queue with cooldown to avoid hot retry churn.
-            if (!this.factory.hasModelForBlockId(blockId)) {
+            if (this.factory.needsModelBakeForBlockId(blockId)) {
                 long now = System.currentTimeMillis();
                 long next = this.nextRequeueMs.getOrDefault(blockId, 0L);
                 if (now >= next) {

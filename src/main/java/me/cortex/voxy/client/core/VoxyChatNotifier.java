@@ -6,6 +6,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Style;
 
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+
 /**
  * Sends brief status messages to the player's chat overlay when Voxy's pipeline
  * changes (shader pack loaded, fallback triggered, etc.).
@@ -20,10 +24,12 @@ import net.minecraft.network.chat.Style;
 public final class VoxyChatNotifier {
     private static final String PREFIX = "[Voxy] ";
 
-    // Dedup: suppress identical notifications within this window
-    private static volatile String lastKey = null;
-    private static volatile long lastTimeMs = 0L;
-    private static final long COOLDOWN_MS = 5_000L;
+    // Dedup: suppress identical notifications within this window.
+    // Track per-key state because renderer/pipeline creation can emit different
+    // notification types during the same join/reload sequence.
+    private static final Map<String, Long> RECENT_KEYS = new HashMap<>();
+    private static final long COOLDOWN_NANOS = 5_000_000_000L;
+    private static final long RETENTION_NANOS = 60_000_000_000L;
 
     private VoxyChatNotifier() {}
 
@@ -79,19 +85,39 @@ public final class VoxyChatNotifier {
 
     // ── internals ────────────────────────────────────────────────────────────
 
+    public static void resetSession(String reason) {
+        synchronized (RECENT_KEYS) {
+            RECENT_KEYS.clear();
+        }
+        me.cortex.voxy.common.Logger.info("[VoxyChatNotifier] Reset notification session; reason='" + reason + "'");
+    }
+
     /** Returns true if this key was sent recently and the message should be suppressed. */
     private static boolean isDuplicate(String key) {
-        long now = System.currentTimeMillis();
-        if (key.equals(lastKey) && (now - lastTimeMs) < COOLDOWN_MS) {
-            return true;
+        long now = System.nanoTime();
+        synchronized (RECENT_KEYS) {
+            pruneExpired(now);
+            Long last = RECENT_KEYS.get(key);
+            RECENT_KEYS.put(key, now);
+            return last != null && (now - last) < COOLDOWN_NANOS;
         }
-        lastKey = key;
-        lastTimeMs = now;
-        return false;
+    }
+
+    private static void pruneExpired(long now) {
+        Iterator<Map.Entry<String, Long>> iterator = RECENT_KEYS.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<String, Long> entry = iterator.next();
+            if ((now - entry.getValue()) >= RETENTION_NANOS) {
+                iterator.remove();
+            }
+        }
     }
 
     private static void sendFormatted(ChatFormatting color, String key, String text) {
-        if (isDuplicate(key)) return;
+        if (isDuplicate(key)) {
+            me.cortex.voxy.common.Logger.info("[VoxyChatNotifier] Suppressed duplicate notification; key='" + key + "'");
+            return;
+        }
         Minecraft mc = Minecraft.getInstance();
         if (mc == null) return;
         MutableComponent component = Component.literal(text)

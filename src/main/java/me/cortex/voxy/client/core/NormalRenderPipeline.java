@@ -35,6 +35,9 @@ import static org.lwjgl.opengl.GL45C.glBindTextureUnit;
 import static org.lwjgl.opengl.GL45C.glTextureParameterf;
 
 public class NormalRenderPipeline extends AbstractRenderPipeline {
+    private static final boolean COPY_DEPTH_TO_VANILLA =
+            Boolean.parseBoolean(System.getProperty("voxy.normalPipelineCopyDepthToVanilla", "false"));
+
     private GlTexture colourTex;
     private GlTexture colourSSAOTex;
     private final GlFramebuffer fbSSAO = new GlFramebuffer();
@@ -50,7 +53,9 @@ public class NormalRenderPipeline extends AbstractRenderPipeline {
         super(nodeManager, nodeCleaner, traversal, frexSupplier, false);
         this.useEnvFog = VoxyConfig.CONFIG.useEnvironmentalFog();
         this.finalBlit = new FullscreenBlit("voxy:post/blit_texture_depth_cutout.frag",
-                a->a.defineIf("USE_ENV_FOG", this.useEnvFog).define("EMIT_COLOUR"));
+                a->a.defineIf("USE_ENV_FOG", this.useEnvFog)
+                        .define("EMIT_COLOUR")
+                        .defineIf("EMIT_DEPTH", COPY_DEPTH_TO_VANILLA));
     }
 
     @Override

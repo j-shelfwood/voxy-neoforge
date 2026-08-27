@@ -94,9 +94,8 @@ public class MixinRenderSectionManager {
     @Unique private int cachedChunkStatus;
     @Unique private int bottomSectionY;
 
-    // Mirror of upstream Sodium logic. Tracks depth mask and rawIngest via setInfo transitions.
-    // Sodium's setInfo returns boolean (changed); Embeddium's returns void.
-    // We use isBuilt() pre/post to detect the same transition.
+    // Built/unbuilt transitions are still useful for ingest timing diagnostics, but the depth mask
+    // is now driven from Embeddium's actual visible render lists inside MixinDefaultChunkRenderer.
     @Redirect(method = "updateSectionInfo", at = @At(value = "INVOKE", target = "Lorg/embeddedt/embeddium/impl/render/chunk/RenderSection;setInfo(Lorg/embeddedt/embeddium/impl/render/chunk/data/BuiltSectionInfo;)V"))
     private void voxy$updateOnUpload(RenderSection instance, BuiltSectionInfo info) {
         boolean wasBuilt = instance.isBuilt();
@@ -116,17 +115,11 @@ public class MixinRenderSectionManager {
         }
 
         int x = instance.getChunkX(), y = instance.getChunkY(), z = instance.getChunkZ();
-        long pos = SectionPos.asLong(x, y, z);
-
         if (!wasBuilt) {
             voxy$transitionUnbuiltToBuilt++;
-            // Transition: unbuilt → built. Add to depth mask.
-            system.chunkBoundRenderer.addSection(pos);
             this.voxy$tryIngestChunk(x, z, "section_built");
         } else {
             voxy$transitionBuiltToUnbuilt++;
-            // Transition: built → unbuilt. Remove from depth mask.
-            system.chunkBoundRenderer.removeSection(pos);
 
             // rawIngest on section being cleared (non-Bobby path)
             if (VoxyConfig.CONFIG.isIngestEnabled()) {
@@ -160,23 +153,14 @@ public class MixinRenderSectionManager {
             return;
         }
 
-        int addQ = -1;
-        int remQ = -1;
-        int tracked = -1;
-        if (system != null) {
-            addQ = system.chunkBoundRenderer.getPendingAddCount();
-            remQ = system.chunkBoundRenderer.getPendingRemoveCount();
-            tracked = system.chunkBoundRenderer.getTrackedSectionCount();
-        }
+        int tracked = system != null ? system.chunkBoundRenderer.getTrackedSectionCount() : -1;
 
         Logger.info("[VoxyDiag] sectionTransitions intervalMs="
                 + (VOXY_SECTION_TRANSITION_LOG_INTERVAL_NANOS / 1_000_000L)
                 + " builtToUnbuilt=" + voxy$transitionBuiltToUnbuilt
                 + " unbuiltToBuilt=" + voxy$transitionUnbuiltToBuilt
                 + " unchanged=" + voxy$transitionNoop
-                + " chunkBoundAddQ=" + addQ
-                + " chunkBoundRemQ=" + remQ
-                + " chunkBoundTracked=" + tracked);
+                + " visibleMaskTracked=" + tracked);
 
         voxy$transitionBuiltToUnbuilt = 0;
         voxy$transitionUnbuiltToBuilt = 0;

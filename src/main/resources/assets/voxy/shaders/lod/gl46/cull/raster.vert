@@ -21,11 +21,13 @@ void main() {
     ivec3 ipos = extractPosition(section);
     ivec3 aabbOffset = extractAABBOffset(section);
     ivec3 size = extractAABBSize(section);
+    int overscanBlocks = int(ceil(max(sectionVisibilityCullExpansionBlocks, 0.0)));
+    ivec3 overscan = ivec3(overscanBlocks);
 
     //Transform ipos with respect to the vertex corner
     ivec3 pos = (((ipos<<detail)-baseSectionPos)<<5);
-    pos += (aabbOffset-1)*(1<<detail);
-    pos += (ivec3(gl_VertexID&1, (gl_VertexID>>2)&1, (gl_VertexID>>1)&1)*(size+2))*(1<<detail);
+    pos += (aabbOffset-1)*(1<<detail) - overscan;
+    pos += (ivec3(gl_VertexID&1, (gl_VertexID>>2)&1, (gl_VertexID>>1)&1)*((size+2)*(1<<detail) + overscan*2));
 
     gl_Position = MVP * vec4(vec3(pos),1);
 

@@ -32,7 +32,8 @@ final class VoxyLoadingIndicatorRenderer {
         int cy = y1 + ANIM_RADIUS + PADDING;
         float meshLevel = queueLevel(model.meshQueue, 2200f);
         float modelLevel = queueLevel(model.modelQueue, 950f);
-        float nodeLevel = model.nodePending ? 1f : (0.12f + 0.07f * (1.0f - Math.abs(0.5f - model.pulse) * 2.0f));
+        int totalNodePressure = model.queuedNodeRequests + model.inFlightNodeRequests;
+        float nodeLevel = queueLevel(totalNodePressure, 640f);
         float residencyLevel = queueLevel(model.loadedSections, 45000f);
         float sweep = model.pulse * 6.2831855f;
 
@@ -85,7 +86,7 @@ final class VoxyLoadingIndicatorRenderer {
     private static void renderMetricLegend(GuiGraphics gui, int x, int y, VoxyLoadingIndicatorModel model, float mesh, float baked, float node, float residency) {
         drawMetricLane(gui, x, y, "MESH BUILD", MESH_COLOR, mesh, model.meshQueue, model.alpha);
         drawMetricLane(gui, x, y + 12, "MODEL BAKE", MODEL_COLOR, baked, model.modelQueue, model.alpha);
-        drawMetricLane(gui, x, y + 24, "NODE FETCH", NODE_COLOR, node, model.nodePending ? 1 : 0, model.alpha);
+        drawMetricLane(gui, x, y + 24, "NODE FETCH", NODE_COLOR, node, model.queuedNodeRequests + model.inFlightNodeRequests, model.alpha);
         drawMetricLane(gui, x, y + 36, "RESIDENCY", RESIDENCY_COLOR, residency, model.loadedSections, model.alpha);
     }
 

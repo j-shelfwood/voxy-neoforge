@@ -26,7 +26,7 @@ final class VoxyLoadingIndicatorController {
         if (snapshot == null || snapshot.shuttingDown()) {
             this.mode = VoxyLoadingIndicatorModel.Mode.HIDDEN;
             this.alpha += (0f - this.alpha) * 0.25f;
-            return new VoxyLoadingIndicatorModel(this.mode, this.alpha, this.displayedProgress, this.pulse, 0, 0, false, 0);
+            return new VoxyLoadingIndicatorModel(this.mode, this.alpha, this.displayedProgress, this.pulse, 0, 0, 0, 0, 0, 0, 0, 0);
         }
 
         int pending = snapshot.pendingUnits();
@@ -37,7 +37,9 @@ final class VoxyLoadingIndicatorController {
                 this.initialIdleStartMs = -1L;
                 this.mode = VoxyLoadingIndicatorModel.Mode.INITIAL_LOAD;
                 this.peakPending = Math.max(this.peakPending, pending);
-                float targetProgress = 1.0f - (pending / (float) Math.max(1, this.peakPending));
+                float targetProgress = snapshot.totalRoots() > 0
+                        ? snapshot.phaseProgress()
+                        : 1.0f - (pending / (float) Math.max(1, this.peakPending));
                 this.displayedProgress += (targetProgress - this.displayedProgress) * 0.18f;
                 this.alpha += (0.82f - this.alpha) * 0.15f;
             } else {
@@ -72,7 +74,11 @@ final class VoxyLoadingIndicatorController {
                 this.pulse,
                 snapshot.meshQueue(),
                 snapshot.modelQueue(),
-                snapshot.nodeWorkPending(),
+                snapshot.queuedNodeRequests(),
+                snapshot.inFlightNodeRequests(),
+                snapshot.currentPhaseLevel(),
+                snapshot.completedRoots(),
+                snapshot.totalRoots(),
                 snapshot.loadedSections());
     }
 

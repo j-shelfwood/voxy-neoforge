@@ -87,7 +87,6 @@ public class VoxyRenderSystem {
             Long.getLong("voxy.modelBudgetMaxNs", 2_000_000L);
     private static final long TARGET_FRAME_BUDGET_NS =
             Long.getLong("voxy.targetFrameBudgetNs", 16_666_667L);
-
     private static final boolean RENDER_LODS_IN_IRIS_SHADOW_PASS =
             System.getProperty("voxy.renderLodsInIrisShadowPass", "false").equalsIgnoreCase("true");
     private static final boolean ENABLE_IRIS_RENDERER_RECREATE =
@@ -116,6 +115,7 @@ public class VoxyRenderSystem {
 
     private final AbstractRenderPipeline pipeline;
     private volatile boolean shuttingDown = false;
+    private final long createdAtNanos = System.nanoTime();
 
     public boolean isUsingIrisPipeline() {
         return this.pipeline instanceof IrisVoxyRenderPipeline;
@@ -136,8 +136,10 @@ public class VoxyRenderSystem {
         }
         int meshQueue = this.renderGen.getTaskCount();
         int modelQueue = this.modelService.getProcessingCount();
-        boolean nodeWorkPending = meshQueue > 0 || modelQueue > 0;
-        return new VoxyLoadingSnapshot(meshQueue, modelQueue, nodeWorkPending, Math.max(0, loadedSections), this.shuttingDown);
+        var loading = this.nodeManager.getLoadingState();
+        return new VoxyLoadingSnapshot(meshQueue, modelQueue, loading.queuedRequests(), loading.inFlightRequests(),
+                loading.currentPhaseLevel(), loading.completedRoots(), loading.totalRoots(),
+                Math.max(0, loadedSections), this.shuttingDown);
     }
 
     public static void scheduleRendererRecreate(String reason) {
@@ -381,6 +383,8 @@ public class VoxyRenderSystem {
                 // Disabled for Embeddium compatibility - FogParameters not wired
                 // .setFogParameters(fogParameters)
                 .update();
+
+        this.updateSchedulerState(viewport);
 
         if (VoxyClient.getOcclusionDebugState()==0) {
             viewport.frameId++;
@@ -769,10 +773,6 @@ public class VoxyRenderSystem {
         } else if (modelQueueCount > 200) {
             dynamicModelBudgetNs = Math.min(MODEL_BUDGET_NS_MAX, dynamicModelBudgetNs + 250_000L);
         }
-        // If mesh generation pressure is high, reserve more frame time for terrain generation.
-        if (this.renderGen.getTaskCount() > 2000) {
-            dynamicModelBudgetNs = Math.max(MODEL_BUDGET_NS_MIN, dynamicModelBudgetNs / 2);
-        }
         return dynamicModelBudgetNs;
     }
 
@@ -913,6 +913,7 @@ public class VoxyRenderSystem {
 
     public void addDebugInfo(List<String> debug) {
         var mc = Minecraft.getInstance();
+        long rendererAgeMs = (System.nanoTime() - this.createdAtNanos) / 1_000_000L;
         String dim = (mc.level == null) ? "none" : mc.level.dimension().location().toString();
         boolean shaderPackEnabled = IrisCompatManager.isShaderPackEnabled();
         boolean shadowActive = IrisCompatManager.isShadowActive();
@@ -928,6 +929,11 @@ public class VoxyRenderSystem {
             this.nodeManager.addDebug(debug);
             this.pipeline.addDebug(debug);
         }
+        var scheduler = this.nodeManager.getSchedulerDebugState();
+        debug.add("Scheduler: phase=" + scheduler.currentPhaseLevel()
+                + " roots=" + scheduler.completedRoots() + "/" + scheduler.totalRoots()
+                + " queued=" + scheduler.queuedCurrentPhase() + "/" + scheduler.queuedDeferredPhase()
+                + " ageMs=" + rendererAgeMs);
         {
             TimingStatistics.update();
             debug.add("Voxy frame runtime (millis): " + TimingStatistics.dynamic.pVal() + ", " + TimingStatistics.main.pVal()+ ", " + TimingStatistics.postDynamic.pVal()+ ", " + TimingStatistics.all.pVal());
@@ -936,6 +942,11 @@ public class VoxyRenderSystem {
         }
         debug.add(GPUTiming.INSTANCE.getDebug());
         PrintfDebugUtil.addToOut(debug);
+    }
+
+    private void updateSchedulerState(Viewport<?> viewport) {
+        this.renderGen.updatePriorityState(viewport.cameraX, viewport.cameraY, viewport.cameraZ);
+        this.nodeManager.updatePriorityState(viewport.cameraX, viewport.cameraY, viewport.cameraZ);
     }
 
     public void shutdown() {
@@ -1001,9 +1012,12 @@ public class VoxyRenderSystem {
             geometryCapacity = Math.max(geometryCapacity, SPARSE_GEOMETRY_MIN_BYTES);
         }
 
-        if (Capabilities.INSTANCE.canQueryGpuMemory && !(Capabilities.INSTANCE.isNvidia && Capabilities.INSTANCE.sparseBuffer)) {
-            long limit = Capabilities.INSTANCE.getFreeDedicatedGpuMemory() - (long)(1.5*1024*1024*1024);
-            limit = Math.max(512*1024*1024, limit);
+        if (Capabilities.INSTANCE.canQueryGpuMemory) {
+            long reservedHeadroom = (Capabilities.INSTANCE.isNvidia && Capabilities.INSTANCE.sparseBuffer)
+                    ? (long) (2.5 * 1024 * 1024 * 1024L)
+                    : (long) (1.5 * 1024 * 1024 * 1024L);
+            long limit = Capabilities.INSTANCE.getFreeDedicatedGpuMemory() - reservedHeadroom;
+            limit = Math.max(768L * 1024L * 1024L, limit);
             geometryCapacity = Math.min(geometryCapacity, limit);
         }
         var override = System.getProperty("voxy.geometryBufferSizeOverrideMB", "");

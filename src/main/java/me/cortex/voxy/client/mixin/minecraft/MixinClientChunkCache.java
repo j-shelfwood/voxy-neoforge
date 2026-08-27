@@ -4,6 +4,7 @@ import me.cortex.voxy.client.ICheekyClientChunkCache;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.common.util.ModCompat;
 import me.cortex.voxy.common.world.service.VoxelIngestService;
+import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientChunkCache;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
@@ -19,6 +20,7 @@ public class MixinClientChunkCache implements ICheekyClientChunkCache {
     @Unique
     private static final boolean BOBBY_INSTALLED = ModCompat.isModLoaded("bobby");
 
+    @Shadow private ClientLevel level;
     @Shadow volatile ClientChunkCache.Storage storage;
 
     @Override

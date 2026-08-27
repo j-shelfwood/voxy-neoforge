@@ -3,12 +3,12 @@ package me.cortex.voxy.common.config.compressors;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.util.ThreadLocalMemoryBuffer;
-import me.cortex.voxy.common.world.SaveLoadSystem;
+import me.cortex.voxy.common.world.SaveLoadSystem3;
 import net.jpountz.lz4.LZ4Factory;
 import org.lwjgl.system.MemoryUtil;
 
 public class LZ4Compressor implements StorageCompressor {
-    private static final ThreadLocalMemoryBuffer SCRATCH = new ThreadLocalMemoryBuffer(SaveLoadSystem.BIGGEST_SERIALIZED_SECTION_SIZE + 1024);
+    private static final ThreadLocalMemoryBuffer SCRATCH = new ThreadLocalMemoryBuffer(SaveLoadSystem3.BIGGEST_SERIALIZED_SECTION_SIZE + 1024);
 
     private final net.jpountz.lz4.LZ4Compressor compressor;
     private final net.jpountz.lz4.LZ4FastDecompressor decompressor;

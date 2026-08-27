@@ -32,7 +32,7 @@ import static org.lwjgl.opengl.GL45.*;
 public class HierarchicalOcclusionTraverser {
     public static final boolean HIERARCHICAL_SHADER_DEBUG = System.getProperty("voxy.hierarchicalShaderDebug", "false").equals("true");
 
-    public static final int MAX_REQUEST_QUEUE_SIZE = 32;
+    public static final int MAX_REQUEST_QUEUE_SIZE = 64;
     public static final int MAX_QUEUE_SIZE = 200_000;
 
     private static final int MAX_ITERATIONS = WorldEngine.MAX_LOD_LAYER+1;
@@ -57,24 +57,6 @@ public class HierarchicalOcclusionTraverser {
     private final GlBuffer scratchQueueA = new GlBuffer(MAX_QUEUE_SIZE*4).zero();
     private final GlBuffer scratchQueueB = new GlBuffer(MAX_QUEUE_SIZE*4).zero();
 
-    private static final boolean ENABLE_MOTION_REQUEST_THROTTLE =
-            System.getProperty("voxy.motionRequestThrottle", "true").equalsIgnoreCase("true");
-    private static final double MOTION_REQUEST_THRESHOLD_BLOCKS =
-            Double.parseDouble(System.getProperty("voxy.motionRequestThreshold", "2.0"));
-    private static final double ROTATION_REQUEST_THRESHOLD_DEGREES =
-            Double.parseDouble(System.getProperty("voxy.rotationRequestThresholdDegrees", "1.5"));
-    private static final double MOTION_REQUEST_SCALE =
-            Double.parseDouble(System.getProperty("voxy.motionRequestScale", "0.25"));
-    private static final double ROTATION_REQUEST_SCALE =
-            Double.parseDouble(System.getProperty("voxy.rotationRequestScale", "0.35"));
-    private static final boolean LOG_MOTION_REQUEST_THROTTLE =
-            System.getProperty("voxy.motionRequestLog", "false").equalsIgnoreCase("true");
-    private static final double REQUEST_BUDGET_EMA_ALPHA =
-            Double.parseDouble(System.getProperty("voxy.requestBudgetSmoothingAlpha", "0.25"));
-    private static final double REQUEST_BUDGET_MAX_STEP_UP =
-            Double.parseDouble(System.getProperty("voxy.requestBudgetMaxStepUp", "6.0"));
-    private static final double REQUEST_BUDGET_MAX_STEP_DOWN =
-            Double.parseDouble(System.getProperty("voxy.requestBudgetMaxStepDown", "12.0"));
     // Prefetch margin to reduce edge pop-in when rotating without fully disabling culling.
     private static final float REQUEST_FRUSTUM_EXPANSION_BLOCKS =
             Float.parseFloat(System.getProperty("voxy.requestFrustumExpansionBlocks", "48.0"));
@@ -87,27 +69,27 @@ public class HierarchicalOcclusionTraverser {
             Float.parseFloat(System.getProperty("voxy.requestFrustumDirectionalMotionScale", "3.0"));
     private static final float REQUEST_DIRECTIONAL_EXPANSION_MAX_EXTRA =
             Float.parseFloat(System.getProperty("voxy.requestFrustumDirectionalMaxExtra", "64.0"));
-    private static final int TRAVERSAL_INTERVAL_FRAMES =
-            Math.max(1, Integer.parseInt(System.getProperty("voxy.traversalIntervalFrames", "1")));
-    private static final boolean ENABLE_ADAPTIVE_TRAVERSAL_INTERVAL =
-            System.getProperty("voxy.adaptiveTraversalInterval", "true").equalsIgnoreCase("true");
-    private static final int TRAVERSAL_MAX_INTERVAL_FRAMES =
-            Math.max(TRAVERSAL_INTERVAL_FRAMES, Integer.parseInt(System.getProperty("voxy.traversalIntervalMaxFrames", "3")));
-    private static final double TRAVERSAL_FORCE_MOTION_BLOCKS =
-            Double.parseDouble(System.getProperty("voxy.traversalForceMotionBlocks", "1.25"));
-    private static final double TRAVERSAL_FORCE_ROTATION_DEGREES =
-            Double.parseDouble(System.getProperty("voxy.traversalForceRotationDegrees", "1.0"));
-    private static final int TRAVERSAL_FORCE_BACKLOG_HIGH =
-            Math.max(1, Integer.parseInt(System.getProperty("voxy.traversalForceBacklogHigh", "1500")));
-    private static final int TRAVERSAL_BACKLOG_LOW =
-            Math.max(0, Integer.parseInt(System.getProperty("voxy.traversalBacklogLow", "300")));
+    private static final boolean ENABLE_ROTATION_FRUSTUM_EXPANSION =
+            System.getProperty("voxy.requestFrustumRotationExpansion", "true").equalsIgnoreCase("true");
+    private static final double REQUEST_ROTATION_EXPANSION_THRESHOLD_DEGREES =
+            Double.parseDouble(System.getProperty("voxy.requestFrustumRotationThresholdDegrees", "0.35"));
+    private static final float REQUEST_ROTATION_EXPANSION_DEGREES_SCALE =
+            Float.parseFloat(System.getProperty("voxy.requestFrustumRotationDegreesScale", "28.0"));
+    private static final float REQUEST_ROTATION_EXPANSION_MAX_EXTRA =
+            Float.parseFloat(System.getProperty("voxy.requestFrustumRotationMaxExtra", "96.0"));
     private static final int HIZ_DISABLE_FROM_LOD =
             Math.max(0, Integer.parseInt(System.getProperty("voxy.hizDisableFromLod", String.valueOf(MAX_ITERATIONS + 1))));
+    private static final int PERF_LOG_INTERVAL_FRAMES =
+            Math.max(1, Integer.parseInt(System.getProperty("voxy.traversalPerfLogIntervalFrames", "300")));
     private double lastCamX = Double.NaN, lastCamY = Double.NaN, lastCamZ = Double.NaN;
     private float lastNearPlaneX = Float.NaN, lastNearPlaneY = Float.NaN, lastNearPlaneZ = Float.NaN;
     private double lastRequestBudget = Double.NaN;
     private int traversalFrameCounter = 0;
-    private int motionThrottleLogCooldown = 0;
+    private int perfLogFrameCounter = 0;
+    private int lastTraversalIntervalFrames = 1;
+    private int lastRequestBudgetSize = 0;
+    private double lastRotationDegrees = 0.0;
+    private float lastRotationExpansionBlocks = 0.0f;
 
     private static int BINDING_COUNTER = 1;
     private static final int SCENE_UNIFORM_BINDING = BINDING_COUNTER++;
@@ -220,9 +202,31 @@ public class HierarchicalOcclusionTraverser {
         nglClearNamedBufferSubData(this.topNodeIds.id, GL_R32UI, idx*4L, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, SCRATCH);
     }
 
-    private void setFrustum(Viewport<?> viewport, long ptr, double camDx, double camDy, double camDz) {
+    private double computeRotationDegrees(Viewport<?> viewport) {
+        if (Float.isNaN(this.lastNearPlaneX)) {
+            return 0.0;
+        }
+        float nearPlaneX = viewport.frustumPlanes[4].x;
+        float nearPlaneY = viewport.frustumPlanes[4].y;
+        float nearPlaneZ = viewport.frustumPlanes[4].z;
+        double dot = nearPlaneX * this.lastNearPlaneX
+                + nearPlaneY * this.lastNearPlaneY
+                + nearPlaneZ * this.lastNearPlaneZ;
+        dot = Math.max(-1.0, Math.min(1.0, dot));
+        return Math.toDegrees(Math.acos(dot));
+    }
+
+    private void setFrustum(Viewport<?> viewport, long ptr, double camDx, double camDy, double camDz, double rotationDegrees) {
         float motionLen = (float) Math.sqrt(camDx * camDx + camDy * camDy + camDz * camDz);
         float invMotionLen = motionLen > 0.0001f ? 1.0f / motionLen : 0.0f;
+        float rotationExpansion = 0.0f;
+        if (ENABLE_ROTATION_FRUSTUM_EXPANSION && rotationDegrees >= REQUEST_ROTATION_EXPANSION_THRESHOLD_DEGREES) {
+            rotationExpansion = Math.min(
+                    REQUEST_ROTATION_EXPANSION_MAX_EXTRA,
+                    (float) rotationDegrees * REQUEST_ROTATION_EXPANSION_DEGREES_SCALE
+            );
+        }
+        this.lastRotationExpansionBlocks = rotationExpansion;
         for (int i = 0; i < 6; i++) {
             var plane = viewport.frustumPlanes[i];
             float nx = plane.x;
@@ -243,6 +247,9 @@ public class HierarchicalOcclusionTraverser {
                     );
                     expansion += directionalExtra;
                 }
+            }
+            if (rotationExpansion > 0.0f && i != 4) {
+                expansion += rotationExpansion;
             }
             if (expansion != 0.0f) {
                 float nLen = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
@@ -266,6 +273,8 @@ public class HierarchicalOcclusionTraverser {
             camDy = viewport.cameraY - this.lastCamY;
             camDz = viewport.cameraZ - this.lastCamZ;
         }
+        double rotationDegrees = this.computeRotationDegrees(viewport);
+        this.lastRotationDegrees = rotationDegrees;
 
         viewport.MVP.getToAddress(ptr); ptr += 4*4*4;
 
@@ -282,7 +291,7 @@ public class HierarchicalOcclusionTraverser {
         //Screen space size for descending
         MemoryUtil.memPutFloat(ptr, (float) (screenspaceAreaDecreasingSize) /(viewport.width*viewport.height)); ptr += 4;
 
-        this.setFrustum(viewport, ptr, camDx, camDy, camDz); ptr += 4*4*6;
+        this.setFrustum(viewport, ptr, camDx, camDy, camDz, rotationDegrees); ptr += 4*4*6;
 
         MemoryUtil.memPutInt(ptr, (int) (viewport.getRenderList().size()/4-1)); ptr += 4;
 
@@ -290,45 +299,6 @@ public class HierarchicalOcclusionTraverser {
         MemoryUtil.memPutInt(ptr, this.nodeCleaner.visibilityId); ptr += 4;
 
         {
-            final double TARGET_COUNT = 4000;//TODO: make this configurable, or at least dynamically computed based on throughput rate of mesh gen
-            double iFillness = Math.max(0, (TARGET_COUNT - this.meshGen.getTaskCount()) / TARGET_COUNT);
-            iFillness = Math.pow(iFillness, 2);
-            if (ENABLE_MOTION_REQUEST_THROTTLE && !Double.isNaN(this.lastCamX)) {
-                double dx = camDx;
-                double dy = camDy;
-                double dz = camDz;
-                double motion = Math.sqrt(dx * dx + dy * dy + dz * dz);
-                double throttleScale = 1.0;
-                if (motion >= MOTION_REQUEST_THRESHOLD_BLOCKS) {
-                    throttleScale = Math.min(throttleScale, Math.max(0.0, Math.min(1.0, MOTION_REQUEST_SCALE)));
-                }
-
-                double rotationDegrees = 0.0;
-                if (!Float.isNaN(this.lastNearPlaneX)) {
-                    float nearPlaneX = viewport.frustumPlanes[4].x;
-                    float nearPlaneY = viewport.frustumPlanes[4].y;
-                    float nearPlaneZ = viewport.frustumPlanes[4].z;
-                    double dot = nearPlaneX * this.lastNearPlaneX
-                            + nearPlaneY * this.lastNearPlaneY
-                            + nearPlaneZ * this.lastNearPlaneZ;
-                    dot = Math.max(-1.0, Math.min(1.0, dot));
-                    rotationDegrees = Math.toDegrees(Math.acos(dot));
-                    if (rotationDegrees >= ROTATION_REQUEST_THRESHOLD_DEGREES) {
-                        throttleScale = Math.min(throttleScale, Math.max(0.0, Math.min(1.0, ROTATION_REQUEST_SCALE)));
-                    }
-                }
-
-                if (throttleScale < 1.0) {
-                    iFillness *= throttleScale;
-                }
-
-                if (LOG_MOTION_REQUEST_THROTTLE && throttleScale < 1.0 && this.motionThrottleLogCooldown-- <= 0) {
-                    this.motionThrottleLogCooldown = 120;
-                    Logger.info("[HierarchicalTraversal] Motion throttle active; motion=" + motion +
-                            ", rotation=" + rotationDegrees +
-                            ", requestScale=" + throttleScale + ", meshTasks=" + this.meshGen.getTaskCount());
-                }
-            }
             this.lastCamX = viewport.cameraX;
             this.lastCamY = viewport.cameraY;
             this.lastCamZ = viewport.cameraZ;
@@ -336,27 +306,16 @@ public class HierarchicalOcclusionTraverser {
             this.lastNearPlaneY = viewport.frustumPlanes[4].y;
             this.lastNearPlaneZ = viewport.frustumPlanes[4].z;
 
-            double targetRequestBudget = iFillness * MAX_REQUEST_QUEUE_SIZE;
-            targetRequestBudget = Math.max(0.0, Math.min(MAX_REQUEST_QUEUE_SIZE, targetRequestBudget));
-            if (Double.isNaN(this.lastRequestBudget)) {
-                this.lastRequestBudget = targetRequestBudget;
-            } else {
-                double alpha = Math.max(0.0, Math.min(1.0, REQUEST_BUDGET_EMA_ALPHA));
-                double smoothedBudget = this.lastRequestBudget + (targetRequestBudget - this.lastRequestBudget) * alpha;
-                double delta = smoothedBudget - this.lastRequestBudget;
-                double maxUp = Math.max(0.0, REQUEST_BUDGET_MAX_STEP_UP);
-                double maxDown = Math.max(0.0, REQUEST_BUDGET_MAX_STEP_DOWN);
-                if (delta > maxUp) {
-                    smoothedBudget = this.lastRequestBudget + maxUp;
-                } else if (delta < -maxDown) {
-                    smoothedBudget = this.lastRequestBudget - maxDown;
-                }
-                this.lastRequestBudget = Math.max(0.0, Math.min(MAX_REQUEST_QUEUE_SIZE, smoothedBudget));
-            }
-
-            final int requestSize = (int) Math.ceil(this.lastRequestBudget);
-            MemoryUtil.memPutInt(ptr, Math.max(0, Math.min(MAX_REQUEST_QUEUE_SIZE, requestSize)));ptr += 4;
+            final double targetCount = 4000.0;
+            double fillness = Math.max(0.0, (targetCount - this.meshGen.getTaskCount()) / targetCount);
+            fillness = Math.pow(fillness, 2.0);
+            int requestBudget = (int) Math.ceil(fillness * MAX_REQUEST_QUEUE_SIZE);
+            this.lastRequestBudget = requestBudget;
+            this.lastRequestBudgetSize = Math.max(0, Math.min(MAX_REQUEST_QUEUE_SIZE, requestBudget));
+            MemoryUtil.memPutInt(ptr, this.lastRequestBudgetSize);ptr += 4;
         }
+
+        MemoryUtil.memPutInt(ptr, this.nodeManager.getCurrentPhaseLevel()); ptr += 4;
 
         if (VoxyConfig.CONFIG.isCameraDistanceCullingEnabled()) {
             MemoryUtil.memPutFloat(ptr, RenderDistancePolicy.getTraversalDistanceSquaredBlocks());
@@ -378,8 +337,10 @@ public class HierarchicalOcclusionTraverser {
 
     public void doTraversal(Viewport<?> viewport) {
         int traversalInterval = this.computeTraversalInterval(viewport);
+        this.lastTraversalIntervalFrames = traversalInterval;
         this.traversalFrameCounter++;
         if (traversalInterval > 1 && (this.traversalFrameCounter % traversalInterval) != 0) {
+            this.maybeLogPerf(viewport, false);
             return;
         }
         this.uploadUniform(viewport);
@@ -416,48 +377,11 @@ public class HierarchicalOcclusionTraverser {
         //Bind the hiz buffer
         glBindSampler(0, 0);
         glBindTextureUnit(0, 0);
+        this.maybeLogPerf(viewport, true);
     }
 
     private int computeTraversalInterval(Viewport<?> viewport) {
-        if (!ENABLE_ADAPTIVE_TRAVERSAL_INTERVAL) {
-            return TRAVERSAL_INTERVAL_FRAMES;
-        }
-        int backlog = this.meshGen.getTaskCount();
-        if (backlog >= TRAVERSAL_FORCE_BACKLOG_HIGH) {
-            return 1;
-        }
-        if (!Double.isNaN(this.lastCamX)) {
-            double dx = viewport.cameraX - this.lastCamX;
-            double dy = viewport.cameraY - this.lastCamY;
-            double dz = viewport.cameraZ - this.lastCamZ;
-            double motion = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            if (motion >= TRAVERSAL_FORCE_MOTION_BLOCKS) {
-                return 1;
-            }
-            if (!Float.isNaN(this.lastNearPlaneX)) {
-                float nearPlaneX = viewport.frustumPlanes[4].x;
-                float nearPlaneY = viewport.frustumPlanes[4].y;
-                float nearPlaneZ = viewport.frustumPlanes[4].z;
-                double dot = nearPlaneX * this.lastNearPlaneX
-                        + nearPlaneY * this.lastNearPlaneY
-                        + nearPlaneZ * this.lastNearPlaneZ;
-                dot = Math.max(-1.0, Math.min(1.0, dot));
-                double rotationDegrees = Math.toDegrees(Math.acos(dot));
-                if (rotationDegrees >= TRAVERSAL_FORCE_ROTATION_DEGREES) {
-                    return 1;
-                }
-            }
-        }
-
-        if (backlog <= TRAVERSAL_BACKLOG_LOW) {
-            return TRAVERSAL_MAX_INTERVAL_FRAMES;
-        }
-        int span = Math.max(1, TRAVERSAL_FORCE_BACKLOG_HIGH - TRAVERSAL_BACKLOG_LOW);
-        double normalized = 1.0 - ((double) (backlog - TRAVERSAL_BACKLOG_LOW) / span);
-        normalized = Math.max(0.0, Math.min(1.0, normalized));
-        int adaptive = TRAVERSAL_INTERVAL_FRAMES
-                + (int) Math.round(normalized * (TRAVERSAL_MAX_INTERVAL_FRAMES - TRAVERSAL_INTERVAL_FRAMES));
-        return Math.max(1, Math.min(TRAVERSAL_MAX_INTERVAL_FRAMES, adaptive));
+        return 1;
     }
 
     private void traverseInternal() {
@@ -572,6 +496,31 @@ public class HierarchicalOcclusionTraverser {
         this.scratchQueueA.free();
         this.scratchQueueB.free();
         glDeleteSamplers(this.hizSampler);
+    }
+
+    private void maybeLogPerf(Viewport<?> viewport, boolean traversedThisFrame) {
+        boolean forceLog = this.lastRotationDegrees >= REQUEST_ROTATION_EXPANSION_THRESHOLD_DEGREES
+                || this.lastRotationExpansionBlocks > 0.0f;
+        if (!forceLog && ++this.perfLogFrameCounter < PERF_LOG_INTERVAL_FRAMES) {
+            return;
+        }
+        this.perfLogFrameCounter = 0;
+
+        Logger.info(
+                "VOXY_PERF traversal",
+                "interval_frames=" + this.lastTraversalIntervalFrames,
+                "executed=" + traversedThisFrame,
+                "request_budget=" + this.lastRequestBudgetSize,
+                "phase=" + this.nodeManager.getCurrentPhaseLevel(),
+                "top_node_count=" + this.topNodeCount,
+                "mesh_queue=" + this.meshGen.getTaskCount(),
+                "current_max_node_id=" + this.nodeManager.getCurrentMaxNodeId(),
+                "camera_distance_culling=" + VoxyConfig.CONFIG.isCameraDistanceCullingEnabled(),
+                "visibility_culling=" + VoxyConfig.CONFIG.isVisibilityCullingEnabled(),
+                "rotation_degrees=" + String.format("%.3f", this.lastRotationDegrees),
+                "rotation_expansion_blocks=" + String.format("%.2f", this.lastRotationExpansionBlocks),
+                "viewport=" + viewport.width + "x" + viewport.height
+        );
     }
 
     private static final long SCRATCH = MemoryUtil.nmemAlloc(32);//32 bytes of scratch memory

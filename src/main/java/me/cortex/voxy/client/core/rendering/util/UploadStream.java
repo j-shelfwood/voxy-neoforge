@@ -22,6 +22,8 @@ import static org.lwjgl.opengl.GL44.GL_MAP_COHERENT_BIT;
 import static org.lwjgl.opengl.GL45C.glFlushMappedNamedBufferRange;
 
 public class UploadStream {
+    private static final int PERF_LOG_INTERVAL_TICKS =
+            Math.max(1, Integer.getInteger("voxy.uploadPerfLogIntervalTicks", 300));
     private final AllocationArena allocationArena = new AllocationArena();
     private final GlPersistentMappedBuffer uploadBuffer;
 
@@ -44,6 +46,10 @@ public class UploadStream {
     private long streamFullRecoveredWithoutFinish;
     private long streamFullForcedFinishCalls;
     private long streamFullHardFailures;
+    private long commitCount;
+    private long totalCommittedCopies;
+    private int lastCommittedCopies;
+    private int perfLogTickCounter;
 
     public UploadStream(long size) {
         this.uploadBuffer = new GlPersistentMappedBuffer(size,GL_CLIENT_STORAGE_BIT|GL_MAP_WRITE_BIT|GL_MAP_UNSYNCHRONIZED_BIT|(USE_COHERENT?GL_MAP_COHERENT_BIT:GL_MAP_FLUSH_EXPLICIT_BIT)).name("UploadStream");
@@ -140,6 +146,7 @@ public class UploadStream {
             glFlushMappedNamedBufferRange(this.uploadBuffer.id, this.caddr, this.offset);
         }
 
+        this.lastCommittedCopies = this.uploadList.size();
         if (this.uploadList.isEmpty()) {
             return;
         }
@@ -150,6 +157,8 @@ public class UploadStream {
             glCopyNamedBufferSubData(this.uploadBuffer.id, entry.target.id, entry.uploadOffset, entry.targetOffset, entry.size);
         }
         this.uploadList.clear();
+        this.commitCount++;
+        this.totalCommittedCopies += this.lastCommittedCopies;
 
         glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);//|GL_SHADER_STORAGE_BARRIER_BIT|GL_UNIFORM_BARRIER_BIT //expected + other barriers which may cause issues if not
 
@@ -181,6 +190,8 @@ public class UploadStream {
             frame.allocations.forEach(this.allocationArena::free);
             frame.fence.free();
         }
+
+        this.maybeLogPerf();
     }
 
     public long getBaseAddress() {
@@ -216,6 +227,32 @@ public class UploadStream {
                 + " forcedFinishCalls=" + this.streamFullForcedFinishCalls
                 + " hardFailures=" + this.streamFullHardFailures
                 + " attempts=" + STREAM_FULL_ATTEMPTS);
+    }
+
+    private void maybeLogPerf() {
+        if (++this.perfLogTickCounter < PERF_LOG_INTERVAL_TICKS) {
+            return;
+        }
+        this.perfLogTickCounter = 0;
+
+        long limit = this.allocationArena.getLimit();
+        long used = this.allocationArena.getSize();
+        long remaining = Math.max(0L, limit - used);
+        long thresholdBytes = (long) Math.floor(limit * DEFER_USAGE_THRESHOLD);
+        long avgCommittedCopies = this.commitCount == 0 ? 0L : this.totalCommittedCopies / this.commitCount;
+
+        Logger.info(
+                "VOXY_PERF upload_stream",
+                "coherent=" + USE_COHERENT,
+                "remaining_bytes=" + remaining,
+                "threshold_bytes=" + thresholdBytes,
+                "used_bytes=" + used,
+                "queued_frames=" + this.frames.size(),
+                "pending_copies=" + this.lastCommittedCopies,
+                "avg_pending_copies=" + avgCommittedCopies,
+                "glfinish_stalls=" + this.streamFullForcedFinishCalls,
+                "backpressure_observations=" + this.streamFullEvents
+        );
     }
 
     private record UploadFrame(GlFence fence, LongArrayList allocations) {}

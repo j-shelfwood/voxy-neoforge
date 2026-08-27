@@ -4,6 +4,7 @@ import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
 import me.cortex.voxy.client.core.gl.Capabilities;
 import me.cortex.voxy.client.core.model.bakery.BudgetBufferRenderer;
+import me.cortex.voxy.client.compat.EmbeddiumRenderCompat;
 import me.cortex.voxy.client.core.rendering.util.SharedIndexBuffer;
 import me.cortex.voxy.client.compat.EmbeddiumOptionsCompatManager;
 import me.cortex.voxy.common.Logger;
@@ -57,6 +58,7 @@ public class VoxyClient {
             Logger.error("Voxy is unsupported on your system.");
         }
 
+        EmbeddiumRenderCompat.register();
         EmbeddiumOptionsCompatManager.register();
     }
 

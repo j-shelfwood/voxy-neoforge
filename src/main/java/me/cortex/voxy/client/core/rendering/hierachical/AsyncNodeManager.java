@@ -26,6 +26,7 @@ import org.lwjgl.system.MemoryUtil;
 
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
+import java.util.ArrayDeque;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -45,6 +46,8 @@ import static org.lwjgl.opengl.GL43C.*;
 //An "async host" for a NodeManager, has specific synchonius entry and exit points
 // this is done off thread to reduce the amount of work done on the render thread, improving frame stability and reducing runtime overhead
 public class AsyncNodeManager {
+    private static final long GEOMETRY_CACHE_LIMIT_BYTES =
+            Long.getLong("voxy.geometryCacheLimitMB", 512L) * 1024L * 1024L;
     private static final VarHandle RESULT_HANDLE;
     private static final VarHandle RESULT_CACHE_1_HANDLE;
     private static final VarHandle RESULT_CACHE_2_HANDLE;
@@ -67,14 +70,28 @@ public class AsyncNodeManager {
     private final BasicAsyncGeometryManager geometryManager;
     private final IGeometryData geometryData;
     private final SectionUpdateRouter router;
+    private final LodPhaseScheduler phaseScheduler;
 
-    private final GeometryCache geometryCache = new GeometryCache(1L<<32);
+    private final GeometryCache geometryCache = new GeometryCache(GEOMETRY_CACHE_LIMIT_BYTES);
 
     private final AtomicInteger workCounter = new AtomicInteger();
     private static final boolean ENABLE_UPLOAD_BACKPRESSURE_DEFERRAL =
             System.getProperty("voxy.asyncNodeUploadBackpressureDeferral", "true").equalsIgnoreCase("true");
     private static final int UPLOAD_BACKPRESSURE_LOG_COOLDOWN_FRAMES =
             Math.max(1, Integer.getInteger("voxy.asyncNodeUploadBackpressureLogCooldownFrames", 120));
+    private static final int PERF_LOG_INTERVAL_TICKS =
+            Math.max(1, Integer.getInteger("voxy.asyncNodePerfLogIntervalTicks", 300));
+    private static final int WARN_THRESHOLD_COPIES =
+            Math.max(1, Integer.getInteger("voxy.asyncNodeWarnThresholdCopies", 500));
+    private static final long SYNC_WAIT_COPY_THRESHOLD_BYTES = 2L << 20;
+    private static final long IDLE_BATCH_DELAY_NANOS =
+            Math.max(0L, Long.getLong("voxy.asyncNodeIdleBatchDelayMicros", 1_000L) * 1_000L);
+    private static final long SYNC_WAIT_POLL_NANOS =
+            Math.max(250_000L, Long.getLong("voxy.asyncNodeSyncWaitPollMicros", 1_000L) * 1_000L);
+    private static final long NEGATIVE_WORK_COUNTER_PAUSE_NANOS =
+            Math.max(250_000L, Long.getLong("voxy.asyncNodeNegativeCounterPauseMicros", 1_000L) * 1_000L);
+    private static final int MAX_REQUESTS_PER_TICK =
+            Math.max(16, Integer.getInteger("voxy.asyncNodeMaxRequestsPerTick", 192));
 
     @SuppressWarnings("FieldMayBeFinal")
     private volatile SyncResults results = null, resultCache1 = new SyncResults(), resultCache2 = new SyncResults();
@@ -87,6 +104,21 @@ public class AsyncNodeManager {
 
     private boolean needsWaitForSync = false;
     private int uploadBackpressureLogCooldown;
+    private long syncWaitEvents;
+    private long copyBatchCount;
+    private long totalCopyBatchEntries;
+    private int maxCopyBatch;
+    private long copyDispatchBatchCount;
+    private long totalCopyDispatchedPerTick;
+    private int maxCopyDispatchedPerTick;
+    private int pendingCopyRemaining;
+    private int pendingResultAgeTicks;
+    private int lastResultCopyEntries;
+    private int lastResultScatterEntries;
+    private int perfLogTickCounter;
+    private long idleBatchDelayEvents;
+    private long syncWaitPolls;
+    private long negativeWorkCounterEvents;
 
     public AsyncNodeManager(int maxNodeCount, IGeometryData geometryData, RenderGenerationService renderService) {
         //Note the current implmentation of ISectionWatcher is threadsafe
@@ -112,17 +144,16 @@ public class AsyncNodeManager {
         this.geometryManager = new BasicAsyncGeometryManager(((BasicSectionGeometryData)geometryData).getMaxSectionCount(), this.geometryCapacity);
 
         this.router = new SectionUpdateRouter();
+        this.phaseScheduler = new LodPhaseScheduler(this.manager = new NodeManager(maxNodeCount, this.geometryManager, this.router));
         this.router.setCallbacks(pos->{//On initial render gen, try get from geometry cache
             var cachedGeometry = this.geometryCache.remove(pos);
             if (cachedGeometry != null) {//Use the cached geometry
                 this.submitGeometryResult(cachedGeometry);
             } else {//Else we need to request it
-                renderService.enqueueTask(pos);
+                renderService.enqueueTask(pos, this.phaseScheduler.getMeshUrgency(pos, false));
             }
-        }, renderService::enqueueTask, this::submitChildChange);
+        }, pos -> renderService.enqueueTask(pos, this.phaseScheduler.getMeshUrgency(pos, true)), this::submitChildChange);
         renderService.setResultConsumer(this::submitGeometryResult);
-
-        this.manager = new NodeManager(maxNodeCount, this.geometryManager, this.router);
 
         //Dont do the move... is just to much effort
         this.manager.setClear(new NodeManager.ICleaner() {
@@ -158,6 +189,10 @@ public class AsyncNodeManager {
         });
     }
 
+    public void updatePriorityState(double cameraX, double cameraY, double cameraZ) {
+        this.phaseScheduler.updateCamera(cameraX, cameraY, cameraZ);
+    }
+
     private SyncResults getMakeResultObject() {
         SyncResults resultSet = (SyncResults)RESULT_CACHE_1_HANDLE.getAndSet(this, null);
         if (resultSet == null) {//Not in the first object
@@ -186,17 +221,16 @@ public class AsyncNodeManager {
             .compile();
 
     private void run() {
-        if (this.workCounter.get() <= 0) {
+        if (this.workCounter.get() <= 0 && !this.phaseScheduler.hasRunnableWork()) {
             //TODO: here, instead of parking, we can do more work on other sub-tasks such as filtering the mesh build queue
             LockSupport.park();
-            if (this.workCounter.get() <= 0 || !this.running) {//No work
+            if ((this.workCounter.get() <= 0 && !this.phaseScheduler.hasRunnableWork()) || !this.running) {//No work
                 return;
             }
-            //This is a funny thing, wait a bit, this allows for better batching, but this thread is independent of everything else so waiting a bit should be mostly ok
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+            // Allow a very short batching window without the coarse 10 ms sleep that adds noticeable latency while turning.
+            if (IDLE_BATCH_DELAY_NANOS > 0L) {
+                this.idleBatchDelayEvents++;
+                LockSupport.parkNanos(IDLE_BATCH_DELAY_NANOS);
             }
         }
 
@@ -206,40 +240,9 @@ public class AsyncNodeManager {
 
 
         int workDone = 0;
-
-        {
-            LongOpenHashSet add = null;
-            LongOpenHashSet rem = null;
-            long stamp = this.tlnLock.writeLock();
-
-            if (!this.tlnAdd.isEmpty()) {
-                add = new LongOpenHashSet(this.tlnAdd);
-                this.tlnAdd.clear();
-            }
-            if (!this.tlnRem.isEmpty()) {
-                rem = new LongOpenHashSet(this.tlnRem);
-                this.tlnRem.clear();
-            }
-
-            this.tlnLock.unlockWrite(stamp);
-            int work = 0;
-            if (rem != null) {
-                var iter = rem.longIterator();
-                while (iter.hasNext()) {
-                    this.manager.removeTopLevelNode(iter.nextLong());
-                    work++;
-                }
-            }
-
-            if (add != null) {
-                var iter = add.longIterator();
-                while (iter.hasNext()) {
-                    this.manager.insertTopLevelNode(iter.nextLong());
-                    work++;
-                }
-            }
-
-            workDone += work;
+        workDone += this.drainTopLevelQueues();
+        if (workDone != 0) {
+            this.phaseScheduler.onRootsChanged();
         }
 
         do {
@@ -276,10 +279,11 @@ public class AsyncNodeManager {
             for (int i = 0; i < count; i++) {
                 long pos = ((long) MemoryUtil.memGetInt(ptr)) << 32; ptr += 4;
                 pos |= Integer.toUnsignedLong(MemoryUtil.memGetInt(ptr)); ptr += 4;
-                this.manager.processRequest(pos);
+                this.phaseScheduler.enqueueVisibleCandidate(pos);
             }
             job.free();
         }
+        this.phaseScheduler.drainRequests(MAX_REQUESTS_PER_TICK);
 
 
         do {
@@ -309,11 +313,8 @@ public class AsyncNodeManager {
         } while (true);
 
         if (this.workCounter.addAndGet(-workDone) < 0) {
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
+            this.negativeWorkCounterEvents++;
+            LockSupport.parkNanos(NEGATIVE_WORK_COUNTER_PAUSE_NANOS);
             //Due to synchronization "issues", wait a millis (give up this time slice)
             if (this.workCounter.get() < 0) {
                 Logger.error("Work counter less than zero, hope it fixes itself...");
@@ -345,7 +346,6 @@ public class AsyncNodeManager {
 
         //manager.writeChanges()
 
-
         //Run in a loop, process all the input events, collect the output events merge with previous and publish
         // note: inner event processing is a loop, is.. should be synced to attomic/volatile variable that is being watched
         // when frametime comes around, want to exit out as quick as possible, or make the event publishing
@@ -368,12 +368,10 @@ public class AsyncNodeManager {
         //TODO: also note! this can be done for the processing of rendered out block models!!
         // (it might be able to also be put in this thread, maybe? but is proabably worth putting in own thread for latency reasons)
         if (this.needsWaitForSync) {
+            this.syncWaitEvents++;
             while (RESULT_HANDLE.get(this) != null && this.running) {
-                try {
-                    Thread.sleep(10);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
+                this.syncWaitPolls++;
+                LockSupport.parkNanos(SYNC_WAIT_POLL_NANOS);
             }
         }
 
@@ -483,7 +481,7 @@ public class AsyncNodeManager {
         results.usedGeometry = this.geometryManager.getGeometryUsedBytes();
         results.currentMaxNodeId = this.manager.getCurrentMaxNodeId();
 
-        this.needsWaitForSync |= results.geometryUpload.currentElemCopyAmount * 8L > 2L << 20;//2mb limit per frame
+        this.needsWaitForSync |= results.geometryUpload.currentElemCopyAmount * 8L > SYNC_WAIT_COPY_THRESHOLD_BYTES;//2mb limit per frame
         this.needsWaitForSync |= results.cleanerOperations.size() > 1024;
         this.needsWaitForSync |= results.scatterWriteLocationMap.size() > 4096;
         this.needsWaitForSync |= results.tlnDelta.size() > 10;
@@ -493,17 +491,89 @@ public class AsyncNodeManager {
         }
     }
 
+    private int drainTopLevelQueues() {
+        int work = 0;
+        long stamp = this.tlnLock.writeLock();
+        try {
+            while (!this.tlnAddQueue.isEmpty()) {
+                long pos = this.tlnAddQueue.removeFirst();
+                this.tlnAddSet.remove(pos);
+                this.manager.insertTopLevelNode(pos);
+                if (this.manager.hasTopLevelNode(pos)) {
+                    this.appliedTopLevelSections.add(pos);
+                }
+                work++;
+            }
+            while (!this.tlnRemQueue.isEmpty()) {
+                long pos = this.tlnRemQueue.removeFirst();
+                this.tlnRemSet.remove(pos);
+                if (this.appliedTopLevelSections.remove(pos)) {
+                    this.manager.removeTopLevelNode(pos);
+                    work++;
+                }
+            }
+        } finally {
+            this.tlnLock.unlockWrite(stamp);
+        }
+        return work;
+    }
+
+    public SchedulerDebugState getSchedulerDebugState() {
+        LodPhaseScheduler.DebugState state = this.phaseScheduler.getDebugState();
+        return new SchedulerDebugState(
+                state.currentPhaseLevel(),
+                state.completedRoots(),
+                state.totalRoots(),
+                state.queuedCurrentPhase(),
+                state.queuedDeferredPhase(),
+                state.starvationRecoveries(),
+                state.staleRequestDrops()
+        );
+    }
+
+    public record SchedulerDebugState(int currentPhaseLevel, int completedRoots, int totalRoots,
+                                      int queuedCurrentPhase, int queuedDeferredPhase,
+                                      long starvationRecoveries, long staleRequestDrops) {}
+
+    public LoadingState getLoadingState() {
+        LodPhaseScheduler.LoadingState state = this.phaseScheduler.getLoadingState(this.manager.getActiveNodeRequestCount());
+        return new LoadingState(
+                state.queuedRequests(),
+                state.inFlightRequests(),
+                state.currentPhaseLevel(),
+                state.completedRoots(),
+                state.totalRoots()
+        );
+    }
+
+    public record LoadingState(int queuedRequests, int inFlightRequests, int currentPhaseLevel,
+                               int completedRoots, int totalRoots) {}
+
+    public int getCurrentPhaseLevel() {
+        return this.phaseScheduler.getCurrentPhaseLevel();
+    }
+
     private IntConsumer tlnAddCallback; private IntConsumer tlnRemoveCallback;
     //Render thread synchronization
     public void tick(GlBuffer nodeBuffer, NodeCleaner cleaner) {//TODO: dont pass nodeBuffer here??, do something else thats better
         var results = (SyncResults)RESULT_HANDLE.getAndSet(this, null);//Acquire the results
         if (results == null) {//There are no new results to process, return
+            this.lastResultCopyEntries = 0;
+            this.lastResultScatterEntries = 0;
+            this.pendingCopyRemaining = 0;
+            this.pendingResultAgeTicks = 0;
+            this.maybeLogPerf();
             return;
         }
+
+        this.lastResultCopyEntries = results.geometryUpload.dataUploadPoints.size();
+        this.lastResultScatterEntries = results.scatterWriteLocationMap.size();
 
         if (ENABLE_UPLOAD_BACKPRESSURE_DEFERRAL) {
             long estimatedUploadBytes = this.estimateRenderThreadUploadBytes(results);
             if (UploadStream.INSTANCE.shouldDefer(estimatedUploadBytes)) {
+                this.pendingCopyRemaining = results.geometryUpload.dataUploadPoints.size();
+                this.pendingResultAgeTicks++;
                 if (this.uploadBackpressureLogCooldown-- <= 0) {
                     this.uploadBackpressureLogCooldown = UPLOAD_BACKPRESSURE_LOG_COOLDOWN_FRAMES;
                     Logger.info("[AsyncNodeManager] Deferring sync due to upload pressure; estBytes=" + estimatedUploadBytes);
@@ -511,9 +581,12 @@ public class AsyncNodeManager {
                 if (!RESULT_HANDLE.compareAndSet(this, null, results)) {
                     throw new IllegalStateException("Failed to requeue sync results under upload pressure");
                 }
+                this.maybeLogPerf();
                 return;
             }
         }
+        this.pendingCopyRemaining = 0;
+        this.pendingResultAgeTicks = 0;
 
         //top level node add/remove
         if (!results.tlnDelta.isEmpty()) {
@@ -540,6 +613,9 @@ public class AsyncNodeManager {
                 TimingStatistics.A.start();
 
                 int copies = upload.dataUploadPoints.size();
+                this.copyBatchCount++;
+                this.totalCopyBatchEntries += copies;
+                this.maxCopyBatch = Math.max(this.maxCopyBatch, copies);
                 int scratchSize = (int) upload.arena.getSize() * 8;
                 long ptr = UploadStream.INSTANCE.rawUploadAddress(scratchSize + copies * 16);
                 UnsafeUtil.memcpy(upload.scratchHeaderBuffer.address, UploadStream.INSTANCE.getBaseAddress() + ptr, copies * 16L);
@@ -551,7 +627,11 @@ public class AsyncNodeManager {
                 glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 1, UploadStream.INSTANCE.getRawBufferId(), ptr+copies*16L, scratchSize);
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, ((BasicSectionGeometryData) this.geometryData).getGeometryBuffer().id);
 
-                if (copies > 500) {
+                this.copyDispatchBatchCount++;
+                this.totalCopyDispatchedPerTick += copies;
+                this.maxCopyDispatchedPerTick = Math.max(this.maxCopyDispatchedPerTick, copies);
+
+                if (copies > WARN_THRESHOLD_COPIES) {
                     Logger.warn("Large amount of copies, lag will probably happen: " + copies);
                 }
 
@@ -600,6 +680,8 @@ public class AsyncNodeManager {
                 throw new IllegalStateException("Could not insert result into cache");
             }
         }
+
+        this.maybeLogPerf();
     }
 
     private long estimateRenderThreadUploadBytes(SyncResults results) {
@@ -618,6 +700,48 @@ public class AsyncNodeManager {
             bytes += (long) results.cleanerOperations.size() * 4L + 16L;
         }
         return bytes;
+    }
+
+    private void maybeLogPerf() {
+        if (++this.perfLogTickCounter < PERF_LOG_INTERVAL_TICKS) {
+            return;
+        }
+        this.perfLogTickCounter = 0;
+
+        long avgCopyBatch = this.copyBatchCount == 0 ? 0L : this.totalCopyBatchEntries / this.copyBatchCount;
+        long avgCopyDispatched = this.copyDispatchBatchCount == 0 ? 0L : this.totalCopyDispatchedPerTick / this.copyDispatchBatchCount;
+        long syncWaitThresholdCopies = SYNC_WAIT_COPY_THRESHOLD_BYTES / 8L;
+        SchedulerDebugState scheduler = this.getSchedulerDebugState();
+
+        Logger.info(
+                "VOXY_PERF async_node",
+                "phase=" + scheduler.currentPhaseLevel(),
+                "phase_roots=" + scheduler.completedRoots() + "/" + scheduler.totalRoots(),
+                "sched_current=" + scheduler.queuedCurrentPhase(),
+                "sched_deferred=" + scheduler.queuedDeferredPhase(),
+                "sched_starvation_recoveries=" + scheduler.starvationRecoveries(),
+                "sched_stale_drops=" + scheduler.staleRequestDrops(),
+                "copy_batches=" + this.copyBatchCount,
+                "avg_copy_batch=" + avgCopyBatch,
+                "max_copy_batch=" + this.maxCopyBatch,
+                "copy_dispatch_batches=" + this.copyDispatchBatchCount,
+                "avg_copy_dispatched_per_tick=" + avgCopyDispatched,
+                "max_copy_dispatched_per_tick=" + this.maxCopyDispatchedPerTick,
+                "pending_copy_remaining=" + this.pendingCopyRemaining,
+                "pending_result_age_ticks=" + this.pendingResultAgeTicks,
+                "result_copy_entries=" + this.lastResultCopyEntries,
+                "result_scatter_entries=" + this.lastResultScatterEntries,
+                "copy_budget_per_tick=" + syncWaitThresholdCopies,
+                "chunked_copy_enabled=false",
+                "sync_wait_events=" + this.syncWaitEvents,
+                "sync_wait_polls=" + this.syncWaitPolls,
+                "sync_wait_threshold_copies=" + syncWaitThresholdCopies,
+                "idle_batch_delay_events=" + this.idleBatchDelayEvents,
+                "idle_batch_delay_micros=" + (IDLE_BATCH_DELAY_NANOS / 1_000L),
+                "sync_wait_poll_micros=" + (SYNC_WAIT_POLL_NANOS / 1_000L),
+                "negative_work_counter_events=" + this.negativeWorkCounterEvents,
+                "warn_threshold_copies=" + WARN_THRESHOLD_COPIES
+        );
     }
 
 
@@ -652,8 +776,11 @@ public class AsyncNodeManager {
     private final ConcurrentLinkedDeque<MemoryBuffer> removeBatchQueue = new ConcurrentLinkedDeque<>();
 
     private final StampedLock tlnLock = new StampedLock();
-    private final LongOpenHashSet tlnAdd = new LongOpenHashSet();
-    private final LongOpenHashSet tlnRem = new LongOpenHashSet();
+    private final ArrayDeque<Long> tlnAddQueue = new ArrayDeque<>();
+    private final ArrayDeque<Long> tlnRemQueue = new ArrayDeque<>();
+    private final LongOpenHashSet tlnAddSet = new LongOpenHashSet();
+    private final LongOpenHashSet tlnRemSet = new LongOpenHashSet();
+    private final LongOpenHashSet appliedTopLevelSections = new LongOpenHashSet();
 
     private void addWork() {
         if (!this.running) {
@@ -706,10 +833,12 @@ public class AsyncNodeManager {
         }
         long stamp = this.tlnLock.writeLock();
         int state = 0;
-        if (!this.tlnRem.remove(section)) {
-            state += this.tlnAdd.add(section)?1:0;
-        } else {
+        if (this.tlnRemSet.remove(section)) {
+            this.tlnRemQueue.removeFirstOccurrence(section);
             state -= 1;
+        } else if (this.tlnAddSet.add(section)) {
+            this.tlnAddQueue.addLast(section);
+            state += 1;
         }
         if (state != 0) {
             if (this.workCounter.getAndAdd(state) == 0) {
@@ -725,10 +854,12 @@ public class AsyncNodeManager {
         }
         long stamp = this.tlnLock.writeLock();
         int state = 0;
-        if (!this.tlnAdd.remove(section)) {
-            state += this.tlnRem.add(section)?1:0;
-        } else {
+        if (this.tlnAddSet.remove(section)) {
+            this.tlnAddQueue.removeFirstOccurrence(section);
             state -= 1;
+        } else if (this.tlnRemSet.add(section)) {
+            this.tlnRemQueue.addLast(section);
+            state += 1;
         }
         if (state != 0) {
             if (this.workCounter.getAndAdd(state) == 0) {
@@ -783,6 +914,18 @@ public class AsyncNodeManager {
             section.release();
         }
 
+        long topLevelStamp = this.tlnLock.writeLock();
+        try {
+            this.tlnAddQueue.clear();
+            this.tlnRemQueue.clear();
+            this.tlnAddSet.clear();
+            this.tlnRemSet.clear();
+            this.appliedTopLevelSections.clear();
+        } finally {
+            this.tlnLock.unlockWrite(topLevelStamp);
+        }
+        this.phaseScheduler.reset();
+
         if (RESULT_HANDLE.get(this) != null) {
             var result = (SyncResults)RESULT_HANDLE.getAndSet(this, null);
             result.geometryUpload.free();
@@ -810,14 +953,20 @@ public class AsyncNodeManager {
         long used = this.getUsedGeometryCapacity();
         long cap  = this.getGeometryCapacity();
         long freeMb = (cap - used) >> 20;
+        SchedulerDebugState scheduler = this.getSchedulerDebugState();
         debug.add("UC/GC: " + (used >> 20) + "/" + (cap >> 20) + " MB  free=" + freeMb + " MB"
                 + "  geoQ=" + this.geometryUpdateQueue.size()
                 + "  childQ=" + this.childUpdateQueue.size()
-                + "  reqQ=" + this.requestBatchQueue.size());
+                + "  reqBatchQ=" + this.requestBatchQueue.size()
+                + "  phase=" + scheduler.currentPhaseLevel()
+                + " roots=" + scheduler.completedRoots() + "/" + scheduler.totalRoots()
+                + " queued=" + scheduler.queuedCurrentPhase() + "/" + scheduler.queuedDeferredPhase());
     }
 
     public boolean hasWork() {
-        return this.workCounter.get()!=0 || RESULT_HANDLE.get(this) != null;
+        return this.workCounter.get()!=0
+                || RESULT_HANDLE.get(this) != null
+                || this.phaseScheduler.hasRunnableWork();
     }
 
     public void worldEvent(WorldSection section, int flags, int neighborMask) {

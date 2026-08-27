@@ -65,6 +65,9 @@ import static org.lwjgl.opengl.GL11.*;
 //TODO: NOTE!!! is it worth even uploading as a 16x16 texture, since automatic lod selection... doing 8x8 textures might be perfectly ok!!!
 // this _quarters_ the memory requirements for the texture atlas!!! WHICH IS HUGE saving
 public class ModelFactory {
+    public static final int MODEL_STATE_UNRESOLVED = -1;
+    public static final int MODEL_STATE_AIR_FALLBACK = -2;
+
     public static final int MODEL_TEXTURE_SIZE = 16;
     public static final int LAYERS = Integer.numberOfTrailingZeros(MODEL_TEXTURE_SIZE);
 
@@ -147,8 +150,8 @@ public class ModelFactory {
         this.metadataCache = new long[1<<16];
         this.fluidStateLUT = new int[1<<16];
         this.idMappings = new int[1<<20];//Max of 1 million blockstates mapping to 65k model states
-        Arrays.fill(this.idMappings, -1);
-        Arrays.fill(this.fluidStateLUT, -1);
+        Arrays.fill(this.idMappings, MODEL_STATE_UNRESOLVED);
+        Arrays.fill(this.fluidStateLUT, MODEL_STATE_UNRESOLVED);
 
         this.modelTexture2id.defaultReturnValue(-1);
         this.addEntry(0);//Add air as the first entry
@@ -183,7 +186,7 @@ public class ModelFactory {
     }
 
     public boolean addEntry(int blockId) {
-        if (this.idMappings[blockId] != -1) {
+        if (this.hasRenderableModelForMapping(this.idMappings[blockId])) {
             return false;
         }
         //We are (probably) going to be baking the block id
@@ -200,7 +203,7 @@ public class ModelFactory {
         VarHandle.loadLoadFence();
 
         //We need to get it twice cause of threading
-        if (this.idMappings[blockId] != -1) {
+        if (this.hasRenderableModelForMapping(this.idMappings[blockId])) {
             this.blockStatesInFlightLock.lock();
             this.blockStatesInFlight.remove(blockId);
             this.blockStatesInFlightLock.unlock();
@@ -218,7 +221,7 @@ public class ModelFactory {
 
             int fluidStateId = this.mapper.getIdForBlockState(fluidState);
 
-            if (this.idMappings[fluidStateId] == -1) {
+            if (this.needsModelBakeForBlockId(fluidStateId)) {
                 //Dont have to check for inflight as that is done recursively :p
 
                 //This is a hack but does work :tm: due to how the download stream is setup
@@ -243,7 +246,7 @@ public class ModelFactory {
     private boolean processModelResult() {
         var result = this.rawBakeResults.poll();
         if (result == null) return false;
-        if (this.idMappings[result.blockId] != -1) {
+        if (this.hasRenderableModelForMapping(this.idMappings[result.blockId])) {
             // Stale callback (e.g. bake was already air-fallbacked). Drop it.
             result.rawData.free();
             return !this.rawBakeResults.isEmpty();
@@ -256,7 +259,7 @@ public class ModelFactory {
         if (!isFluid && !result.blockState.getFluidState().isEmpty()) {
             var fluidLegacyBlock = result.blockState.getFluidState().createLegacyBlock();
             int fluidStateId = this.mapper.getIdForBlockState(fluidLegacyBlock);
-            if (this.idMappings[fluidStateId] == -1) {
+            if (this.needsModelBakeForBlockId(fluidStateId)) {
                 // Fluid not baked yet — defer this result
                 this.rawBakeResults.addLast(result);
                 return !this.rawBakeResults.isEmpty();
@@ -294,11 +297,11 @@ public class ModelFactory {
     }
 
     private void markBlockAsAirFallback(int blockId, BlockState blockState, String stage, Throwable cause) {
-        if (this.idMappings[blockId] == 0) {
+        if (this.idMappings[blockId] == MODEL_STATE_AIR_FALLBACK) {
             this.removeFromInFlightIfPresent(blockId);
             return;
         }
-        this.idMappings[blockId] = 0;
+        this.idMappings[blockId] = MODEL_STATE_AIR_FALLBACK;
         this.removeFromInFlightIfPresent(blockId);
         Logger.warn("[VoxyBakeFallback] Block state " + blockState + " (id=" + blockId + ") failed at " + stage
                 + ", substituting AIR model for LOD continuity. Cause: " + cause);
@@ -398,7 +401,7 @@ public class ModelFactory {
     }
 
     private ModelBakeResultUpload processTextureBakeResult(int blockId, BlockState blockState, ColourDepthTextureData[] textureData, boolean isShaded, boolean darkenedTinting) {
-        if (this.idMappings[blockId] != -1) {
+        if (this.hasRenderableModelForMapping(this.idMappings[blockId])) {
             //This should be impossible to reach as it means that multiple bakes for the same blockId happened and where inflight at the same time!
             throw new IllegalStateException("Block id already added: " + blockId + " for state: " + blockState);
         }
@@ -425,8 +428,11 @@ public class ModelFactory {
             int fluidStateId = this.mapper.getIdForBlockState(fluidState);
 
             clientFluidStateId = this.idMappings[fluidStateId];
-            if (clientFluidStateId == -1) {
+            if (clientFluidStateId == MODEL_STATE_UNRESOLVED) {
                 throw new IllegalStateException("Block has a fluid state but fluid state is not already baked!!!");
+            }
+            if (clientFluidStateId == MODEL_STATE_AIR_FALLBACK) {
+                clientFluidStateId = 0;
             }
         }
 
@@ -1014,22 +1020,48 @@ public class ModelFactory {
 
     public int getModelId(int blockId) {
         int map = this.idMappings[blockId];
-        if (map == -1) {
+        if (map == MODEL_STATE_UNRESOLVED) {
             throw new IdNotYetComputedException(blockId, true);
+        }
+        if (map == MODEL_STATE_AIR_FALLBACK) {
+            return 0;
         }
         return map;
     }
 
     public boolean hasModelForBlockId(int blockId) {
-        return this.idMappings[blockId] != -1;
+        return this.hasRenderableModelForMapping(this.idMappings[blockId]);
+    }
+
+    public boolean needsModelBakeForBlockId(int blockId) {
+        return this.idMappings[blockId] < 0;
+    }
+
+    public boolean isAirFallbackForBlockId(int blockId) {
+        return this.idMappings[blockId] == MODEL_STATE_AIR_FALLBACK;
+    }
+
+    public String describeBlockId(int blockId) {
+        try {
+            return String.valueOf(this.mapper.getBlockStateFromBlockId(blockId));
+        } catch (Throwable t) {
+            return "<unmapped:" + blockId + ">";
+        }
     }
 
     public int getFluidClientStateId(int clientBlockStateId) {
         int map = this.fluidStateLUT[clientBlockStateId];
-        if (map == -1) {
+        if (map == MODEL_STATE_UNRESOLVED) {
             throw new IdNotYetComputedException(clientBlockStateId, false);
         }
+        if (map == MODEL_STATE_AIR_FALLBACK) {
+            return clientBlockStateId;
+        }
         return map;
+    }
+
+    private boolean hasRenderableModelForMapping(int mapping) {
+        return mapping >= 0;
     }
 
     public long getModelMetadataFromClientId(int clientId) {

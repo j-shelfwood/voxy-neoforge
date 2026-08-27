@@ -331,6 +331,7 @@ repositories {
 // Configuration to download LWJGL natives for repackaging
 configurations {
     lwjglNativesRaw
+    lwjglEmbedded
 }
 
 dependencies {
@@ -339,6 +340,15 @@ dependencies {
     lwjglNativesRaw "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-windows"
     lwjglNativesRaw "org.lwjgl:lwjgl-lmdb:$lwjglVersion:natives-linux"
     lwjglNativesRaw "org.lwjgl:lwjgl-zstd:$lwjglVersion:natives-linux"
+
+    // Embed the Java-side helper libraries directly into the main mod JAR.
+    // NeoForge is currently failing to load these as nested jarJar entries during mod discovery.
+    lwjglEmbedded("org.lwjgl:lwjgl-lmdb:$lwjglVersion") {
+        transitive = false
+    }
+    lwjglEmbedded("org.lwjgl:lwjgl-zstd:$lwjglVersion") {
+        transitive = false
+    }
 }
 
 // Task to extract LWJGL native binaries (DLLs/SOs) from native JARs
@@ -392,6 +402,15 @@ tasks.named('jar') {
         // Natives at JAR root for LWJGL to find
         into ''
     }
+
+    // Flatten LWJGL helper classes into the main mod JAR instead of shipping them as nested
+    // jarJar libraries. This avoids NeoForge mod-discovery failures on META-INF/jarjar/lwjgl-zstd.
+    from {
+        configurations.lwjglEmbedded.collect { zipTree(it) }
+    } {
+        exclude 'META-INF/**'
+        exclude 'module-info.class'
+    }
 }
 
 dependencies {
@@ -403,15 +422,15 @@ dependencies {
     // LWJGL-LMDB and LWJGL-ZSTD - Required by Voxy, NOT provided by Minecraft
     // Reference: https://docs.neoforged.net/toolchain/docs/dependencies/nonmclibs/
     //
-    // The natives JARs originally have module-info.class with "requires org.lwjgl.zstd"
-    // which causes JPMS conflict. We repackage them without module-info.class above.
-    jarJar(implementation("org.lwjgl:lwjgl-lmdb:$lwjglVersion")) {
+    // The native binaries are bundled separately at the JAR root. The Java classes are flattened
+    // into the main mod jar above to avoid nested jarJar discovery failures.
+    implementation("org.lwjgl:lwjgl-lmdb:$lwjglVersion") {
         version { strictly "[3.3.0,4.0.0)"; prefer "$lwjglVersion" }
     }
-    jarJar(implementation("org.lwjgl:lwjgl-zstd:$lwjglVersion")) {
+    implementation("org.lwjgl:lwjgl-zstd:$lwjglVersion") {
         version { strictly "[3.3.0,4.0.0)"; prefer "$lwjglVersion" }
     }
-    // Add to runtime classpath for MC 1.21.1 (not needed for 1.21.9+)
+    // Add to runtime classpath for dev/runtime launches (not needed for 1.21.9+)
     additionalRuntimeClasspath "org.lwjgl:lwjgl-lmdb:$lwjglVersion"
     additionalRuntimeClasspath "org.lwjgl:lwjgl-zstd:$lwjglVersion"
     // Natives also need to be on runtime classpath (LWJGL extracts from classpath)

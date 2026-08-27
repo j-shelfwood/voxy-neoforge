@@ -19,6 +19,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.SingleThreadedRandomSource;
 import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.level.material.FluidState;
+import net.neoforged.neoforge.client.model.IDynamicBakedModel;
 import net.neoforged.neoforge.client.model.data.ModelData;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
@@ -38,6 +39,59 @@ import com.mojang.blaze3d.vertex.PoseStack;
 public class ModelTextureBakery {
     //Note: the first bit of metadata is if alpha discard is enabled
     private static final Matrix4f[] VIEWS = new Matrix4f[6];
+    private static final BlockPos APPEARANCE_QUERY_POS = BlockPos.ZERO;
+    private static final BlockPos APPEARANCE_NEIGHBOR_POS = BlockPos.ZERO.relative(Direction.NORTH);
+    private static final BlockAndTintGetter APPEARANCE_QUERY_GETTER = new BlockAndTintGetter() {
+        @Override
+        public float getShade(Direction direction, boolean shaded) {
+            return 0;
+        }
+
+        @Override
+        public LevelLightEngine getLightEngine() {
+            return null;
+        }
+
+        @Override
+        public int getBrightness(LightLayer type, BlockPos pos) {
+            return 0;
+        }
+
+        @Override
+        public int getBlockTint(BlockPos pos, ColorResolver colorResolver) {
+            return 0;
+        }
+
+        @Nullable
+        @Override
+        public BlockEntity getBlockEntity(BlockPos pos) {
+            return null;
+        }
+
+        @Override
+        public BlockState getBlockState(BlockPos pos) {
+            return Blocks.AIR.defaultBlockState();
+        }
+
+        @Override
+        public FluidState getFluidState(BlockPos pos) {
+            return Blocks.AIR.defaultBlockState().getFluidState();
+        }
+
+        @Override
+        public int getHeight() {
+            return 0;
+        }
+
+        public int getMinY() {
+            return 0;
+        }
+
+        @Override
+        public int getMinBuildHeight() {
+            return 0;
+        }
+    };
 
     private final GlViewCapture capture;
     private final ReuseVertexConsumer vc = new ReuseVertexConsumer();
@@ -66,6 +120,32 @@ public class ModelTextureBakery {
         int meta = hasDiscard?1:0;
         meta |= true?2:0;
         return meta;
+    }
+
+    private static BlockState resolveBakeState(BlockState state) {
+        if (!state.hasBlockEntity()) {
+            return state;
+        }
+
+        var model = Minecraft.getInstance()
+                .getModelManager()
+                .getBlockModelShaper()
+                .getBlockModel(state);
+        if (!(model instanceof IDynamicBakedModel)) {
+            return state;
+        }
+
+        // Dynamic block-entity models such as MI machines select overlays from ModelData that Voxy
+        // cannot key globally. Bake their static appearance state instead of sampling invalid
+        // per-instance quads via ModelData.EMPTY.
+        BlockState appearance = state.getAppearance(
+                APPEARANCE_QUERY_GETTER,
+                APPEARANCE_QUERY_POS,
+                Direction.NORTH,
+                Blocks.AIR.defaultBlockState(),
+                APPEARANCE_NEIGHBOR_POS
+        );
+        return appearance == null ? state : appearance;
     }
 
     private void bakeBlockModel(BlockState state, RenderType layer) {
@@ -203,16 +283,17 @@ public class ModelTextureBakery {
 
     public int renderToStream(BlockState state, int streamBuffer, int streamOffset) {
         this.capture.clear();
+        BlockState bakeState = resolveBakeState(state);
         boolean isBlock = true;
         RenderType layer;
-        if (state.getBlock() instanceof LiquidBlock) {
-            layer = ItemBlockRenderTypes.getRenderLayer(state.getFluidState());
+        if (bakeState.getBlock() instanceof LiquidBlock) {
+            layer = ItemBlockRenderTypes.getRenderLayer(bakeState.getFluidState());
             isBlock = false;
         } else {
-            if (state.getBlock() instanceof LeavesBlock) {
+            if (bakeState.getBlock() instanceof LeavesBlock) {
                 layer = RenderType.solid();
             } else {
-                layer = ItemBlockRenderTypes.getChunkRenderType(state);
+                layer = ItemBlockRenderTypes.getChunkRenderType(bakeState);
             }
         }
 
@@ -257,7 +338,7 @@ public class ModelTextureBakery {
         boolean isAnyDarkend = false;
         if (isBlock) {
             this.vc.reset();
-            this.bakeBlockModel(state, layer);
+            this.bakeBlockModel(bakeState, layer);
             isAnyShaded |= this.vc.anyShaded;
             isAnyDarkend |= this.vc.anyDarkendTex;
             // NeoForge 1.21.1: MipmapStrategy.DARK_CUTOUT doesn't exist in vanilla SpriteContents.
@@ -293,7 +374,7 @@ public class ModelTextureBakery {
             glBindVertexArray(0);
         } else {//Is fluid, slow path :(
 
-            if (!(state.getBlock() instanceof LiquidBlock)) throw new IllegalStateException();
+            if (!(bakeState.getBlock() instanceof LiquidBlock)) throw new IllegalStateException();
 
             var mat = new Matrix4f();
             for (int i = 0; i < VIEWS.length; i++) {
@@ -304,7 +385,7 @@ public class ModelTextureBakery {
                 }
 
                 this.vc.reset();
-                this.bakeFluidState(state, layer, i);
+                this.bakeFluidState(bakeState, layer, i);
                 if (this.vc.isEmpty()) continue;
                 isAnyShaded |= this.vc.anyShaded;
                 isAnyDarkend |= this.vc.anyDarkendTex;

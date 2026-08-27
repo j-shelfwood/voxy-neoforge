@@ -36,6 +36,7 @@ public class VoxyNeoForgeConfig {
     private static final boolean DEFAULT_LOADING_INDICATOR = true;
     private static final int DEFAULT_RENDER_DISTANCE_OFFSET = 0;
     private static final int DEFAULT_LOD_BOUNDARY_BUFFER = 0;
+    private static final int DEFAULT_SECTION_VISIBILITY_CULL_OVERSCAN = 32;
 
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
@@ -121,6 +122,11 @@ public class VoxyNeoForgeConfig {
             .comment("Fine-tune LOD handoff boundary in blocks (live update)",
                     "Positive shrinks mask inward (more LOD bleed), negative expands mask")
             .defineInRange("lodBoundaryBuffer", DEFAULT_LOD_BOUNDARY_BUFFER, -128, 128);
+
+    static final ModConfigSpec.IntValue SECTION_VISIBILITY_CULL_OVERSCAN = BUILDER
+            .comment("Extra world-space padding in blocks for per-section visibility culling",
+                    "Reduces screen-edge pop-in while panning the camera at the cost of rendering a small offscreen margin")
+            .defineInRange("sectionVisibilityCullOverscan", DEFAULT_SECTION_VISIBILITY_CULL_OVERSCAN, 0, 128);
 
     public static final ModConfigSpec SPEC = BUILDER.build();
 
@@ -322,6 +328,15 @@ public class VoxyNeoForgeConfig {
         }
     }
 
+    public static int getSectionVisibilityCullOverscan() {
+        if (!configLoaded) return DEFAULT_SECTION_VISIBILITY_CULL_OVERSCAN;
+        try {
+            return SECTION_VISIBILITY_CULL_OVERSCAN.get();
+        } catch (IllegalStateException ignored) {
+            return DEFAULT_SECTION_VISIBILITY_CULL_OVERSCAN;
+        }
+    }
+
     // ========== Setters (for Embeddium UI integration) ==========
 
     public static void setEnabled(boolean value) {
@@ -387,5 +402,9 @@ public class VoxyNeoForgeConfig {
 
     public static void setLodBoundaryBuffer(int value) {
         LOD_BOUNDARY_BUFFER.set(value);
+    }
+
+    public static void setSectionVisibilityCullOverscan(int value) {
+        SECTION_VISIBILITY_CULL_OVERSCAN.set(value);
     }
 }

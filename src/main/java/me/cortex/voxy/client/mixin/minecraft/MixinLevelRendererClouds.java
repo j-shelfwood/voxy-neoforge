@@ -4,6 +4,7 @@ import me.cortex.voxy.client.config.RenderDistancePolicy;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.compat.IrisCompatManager;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.client.debug.RenderPathDebug;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LevelRenderer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -23,19 +24,27 @@ public class MixinLevelRendererClouds {
 
     @Unique
     private static int voxy$cloudTileRadius() {
-        if (IrisCompatManager.isShaderPackEnabled()) {
+        boolean shaderPackEnabled = IrisCompatManager.isShaderPackEnabled();
+        int configuredChunks = RenderDistancePolicy.getConfiguredRenderDistanceChunks();
+
+        if (shaderPackEnabled) {
+            RenderPathDebug.logVanillaClouds("shader_pack_active", true, configuredChunks, -1, 3);
             return 3;
         }
         var levelRenderer = Minecraft.getInstance().levelRenderer;
         if (!(levelRenderer instanceof IGetVoxyRenderSystem ivrs)) {
+            RenderPathDebug.logVanillaClouds("no_voxy_renderer", false, configuredChunks, -1, 3);
             return 3;
         }
         var vrs = ivrs.getVoxyRenderSystem();
         if (vrs == null || !VoxyConfig.CONFIG.isRenderingEnabled()) {
+            RenderPathDebug.logVanillaClouds("voxy_rendering_disabled", false, configuredChunks, -1, 3);
             return 3;
         }
-        int renderDistBlocks = RenderDistancePolicy.getConfiguredRenderDistanceChunks();
-        return Math.max(3, (renderDistBlocks / 8) + 1);
+        int renderDistanceBlocks = RenderDistancePolicy.getConfiguredRenderDistanceBlocks();
+        int tileRadius = RenderDistancePolicy.getVanillaCloudTileRadius();
+        RenderPathDebug.logVanillaClouds("voxy_extend", false, configuredChunks, renderDistanceBlocks, tileRadius);
+        return tileRadius;
     }
 
     // Lower bound constants for k/l loops.

@@ -31,11 +31,13 @@ void main() {
     }
 
     vec3 point = rev3d(vec3(UV.xy, depth));
+    #ifdef EMIT_DEPTH
     depth = projDepth(point);
     depth = min(1.0f-(2.0f/((1<<24)-1)), depth);
     depth = depth * 0.5f + 0.5f;
     depth = gl_DepthRange.diff * depth + gl_DepthRange.near;
     gl_FragDepth = depth;
+    #endif
 
     #ifdef EMIT_COLOUR
     colour = texture(colourTex, UV.xy);

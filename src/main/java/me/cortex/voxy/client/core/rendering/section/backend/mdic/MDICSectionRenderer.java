@@ -150,6 +150,7 @@ public class MDICSectionRenderer extends AbstractSectionRenderer<MDICViewport, B
         }
         MemoryUtil.memPutInt(ptr, viewport.frameId&0x7fffffff); ptr += 4;
         viewport.innerTranslation.getToAddress(ptr); ptr += 4*3;
+        MemoryUtil.memPutFloat(ptr, VoxyConfig.CONFIG.getSectionVisibilityCullOverscan()); ptr += 4;
 
         UploadStream.INSTANCE.commit();
     }

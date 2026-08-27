@@ -25,8 +25,11 @@ function load_map(line,   i,n,a,kv) {
 /VOXY_PERF upload_stream/ { upload_line = $0 }
 /VOXY_PERF world_section_cache/ { section_line = $0 }
 /VOXY_PERF async_node/ { async_line = $0 }
+/VOXY_PERF traversal/ { traversal_line = $0 }
+/VOXY_PERF chunk_mask/ { chunk_mask_line = $0 }
+/\[VoxyDiag\] chunkBoundary/ { chunk_boundary_line = $0 }
 END {
-  if (upload_line == "" && section_line == "" && async_line == "") {
+  if (upload_line == "" && section_line == "" && async_line == "" && traversal_line == "" && chunk_mask_line == "" && chunk_boundary_line == "") {
     print "[INFO] No VOXY_PERF lines found in " FILENAME
     exit 0
   }
@@ -74,6 +77,55 @@ END {
     print "  sync_wait_events=" map["sync_wait_events"]
     print "  sync_wait_threshold_copies=" map["sync_wait_threshold_copies"]
     print "  warn_threshold_copies=" map["warn_threshold_copies"]
+  }
+
+  if (traversal_line != "") {
+    load_map(traversal_line)
+    print "[TRAVERSAL]"
+    print "  interval_frames=" map["interval_frames"]
+    print "  executed=" map["executed"]
+    print "  request_budget=" map["request_budget"]
+    print "  top_node_count=" map["top_node_count"]
+    print "  mesh_queue=" map["mesh_queue"]
+    print "  current_max_node_id=" map["current_max_node_id"]
+    print "  camera_distance_culling=" map["camera_distance_culling"]
+    print "  visibility_culling=" map["visibility_culling"]
+    print "  viewport=" map["viewport"]
+  }
+
+  if (chunk_mask_line != "") {
+    load_map(chunk_mask_line)
+    print "[CHUNK_MASK]"
+    print "  tracked_sections=" map["tracked_sections"]
+    print "  pending_add=" map["pending_add"]
+    print "  pending_remove=" map["pending_remove"]
+    print "  configured_render_distance_chunks=" map["configured_render_distance_chunks"]
+    print "  offset_blocks=" map["offset_blocks"]
+    print "  boundary_buffer_blocks=" map["boundary_buffer_blocks"]
+    print "  render_distance_blocks=" map["render_distance_blocks"]
+    print "  camera=" map["camera"]
+    print "  viewport=" map["viewport"]
+  }
+
+  if (chunk_boundary_line != "") {
+    load_map(chunk_boundary_line)
+    print "[CHUNK_BOUNDARY]"
+    print "  tracked_columns=" map["tracked_columns"]
+    print "  draw_spans=" map["draw_spans"]
+    print "  evaluated_spans=" map["evaluated_spans"]
+    print "  inside_chunk_tracking=" map["inside_chunk_tracking"]
+    print "  inside_sphere=" map["inside_sphere"]
+    print "  inside_cylinder=" map["inside_cylinder"]
+    print "  inside_xz_only=" map["inside_xz_only"]
+    print "  chunk_tracking_not_cylinder=" map["chunk_tracking_not_cylinder"]
+    print "  chunk_tracking_not_xz_only=" map["chunk_tracking_not_xz_only"]
+    print "  xz_only_not_cylinder=" map["xz_only_not_cylinder"]
+    print "  xz_only_not_chunk_tracking=" map["xz_only_not_chunk_tracking"]
+    print "  cylinder_not_sphere=" map["cylinder_not_sphere"]
+    print "  sphere_not_cylinder=" map["sphere_not_cylinder"]
+    print "  max_vertical_excess=" map["max_vertical_excess"]
+    print "  max_sphere_margin=" map["max_sphere_margin"]
+    print "  samples=" map["samples"]
   }
 }
 ' "$LOG_FILE"

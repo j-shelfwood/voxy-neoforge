@@ -4,6 +4,7 @@ import me.cortex.voxy.client.VoxyClientInstance;
 import me.cortex.voxy.client.config.VoxyConfig;
 import me.cortex.voxy.client.compat.IrisCompatManager;
 import me.cortex.voxy.client.core.IGetVoxyRenderSystem;
+import me.cortex.voxy.client.core.VoxyChatNotifier;
 import me.cortex.voxy.client.core.VoxyRenderSystem;
 import me.cortex.voxy.client.iris.VoxyUniforms;
 import me.cortex.voxy.common.Logger;
@@ -56,12 +57,14 @@ public abstract class MixinLevelRenderer implements IGetVoxyRenderSystem {
     private void voxy$captureSetWorld(ClientLevel world, CallbackInfo ci) {
         if (this.level != world) {
             VoxyUniforms.resetTemporalState("level_switch");
+            VoxyChatNotifier.resetSession("level_switch");
             this.shutdownRenderer();
         }
     }
 
     @Inject(method = "close", at = @At("HEAD"))
     private void injectClose(CallbackInfo ci) {
+        VoxyChatNotifier.resetSession("level_renderer_close");
         this.shutdownRenderer();
     }
 

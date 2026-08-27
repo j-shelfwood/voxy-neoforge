@@ -4,6 +4,7 @@ import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import me.cortex.voxy.client.core.model.IdNotYetComputedException;
 import me.cortex.voxy.client.core.model.ModelBakerySubsystem;
+import me.cortex.voxy.client.core.rendering.LodPriorityUtil;
 import me.cortex.voxy.common.thread.Service;
 import me.cortex.voxy.common.thread.ServiceManager;
 import me.cortex.voxy.common.util.Pair;
@@ -27,10 +28,11 @@ public class RenderGenerationService {
     private static final long RETRY_WINDOW_NANOS = 100_000_000L; // 100ms
     private static final int RETRY_PRESSURE_LIMIT = 500;
 
+    public record MeshUrgency(int phaseLevel, boolean visibleUrgency) {}
+
     public static final AtomicInteger MESH_RETRY_COUNTER = new AtomicInteger();
     // Backward-compat alias for existing debug callers.
     public static final AtomicInteger MESH_FAILED_COUNTER = MESH_RETRY_COUNTER;
-    private static final AtomicInteger COUNTER = new AtomicInteger();
     private static final class BuildTask {
         WorldSection section;
         final long position;
@@ -38,23 +40,37 @@ public class RenderGenerationService {
         boolean hasDoneModelRequestOuter;
         int attempts;
         int addin;
-        long priority = Long.MIN_VALUE;
+        int phaseLevel;
+        boolean visibleUrgency;
+        long priority = Long.MAX_VALUE;
         private BuildTask(long position) {
             this.position = position;
+            this.phaseLevel = WorldEngine.getLevel(position);
         }
-        private void updatePriority() {
-            int unique = COUNTER.incrementAndGet();
-            int lvl = WorldEngine.MAX_LOD_LAYER-WorldEngine.getLevel(this.position);
-            lvl = Math.min(lvl, 3);//Make the 2 highest quality have equal priority
-            this.priority = (((lvl*3L + Math.min(this.attempts, 3))*2 + this.addin) <<32) + Integer.toUnsignedLong(unique);
+        private void updatePriority(double cameraX, double cameraY, double cameraZ) {
+            long distanceBucket = LodPriorityUtil.distanceBucket(this.position, cameraX, cameraY, cameraZ);
+            int lodPenalty = Math.max(0, WorldEngine.getLevel(this.position));
+            int retryPenalty = Math.min(255, this.attempts * 16 + this.addin * 8);
+            int phasePenalty = Math.max(0, this.phaseLevel);
+            long visiblePenalty = this.visibleUrgency ? 0L : 1L;
+            this.priority = ((long) phasePenalty << 32)
+                    | (visiblePenalty << 31)
+                    | (distanceBucket << 16)
+                    | ((long) lodPenalty << 8)
+                    | Math.min(255, this.attempts);
             this.addin = 0;
+        }
+
+        private void applyUrgency(MeshUrgency urgency) {
+            this.phaseLevel = urgency.phaseLevel();
+            this.visibleUrgency = urgency.visibleUrgency();
         }
     }
 
     private final AtomicInteger holdingSectionCount = new AtomicInteger();//Used to limit section holding
 
     private final AtomicInteger taskQueueCount = new AtomicInteger();
-    private final PriorityBlockingQueue<BuildTask> taskQueue = new PriorityBlockingQueue<>(5000, (a,b)-> Long.compareUnsigned(a.priority, b.priority));
+    private final PriorityBlockingQueue<BuildTask> taskQueue = new PriorityBlockingQueue<>(5000, (a,b)-> Long.compare(a.priority, b.priority));
     private final StampedLock taskMapLock = new StampedLock();
     private final Long2ObjectOpenHashMap<BuildTask> taskMap = new Long2ObjectOpenHashMap<>(5000);
 
@@ -65,8 +81,9 @@ public class RenderGenerationService {
 
     private final Service service;
     private volatile long retryWindowStartNanos = System.nanoTime();
-
-
+    private volatile double priorityCameraX;
+    private volatile double priorityCameraY;
+    private volatile double priorityCameraZ;
     /*
     public RenderGenerationService(WorldEngine world, ModelBakerySubsystem modelBakery, ServiceManager sm, boolean emitMeshlets) {
         this(world, modelBakery, sm, emitMeshlets, ()->true);
@@ -104,6 +121,12 @@ public class RenderGenerationService {
         this.resultConsumer = consumer;
     }
 
+    public void updatePriorityState(double cameraX, double cameraY, double cameraZ) {
+        this.priorityCameraX = cameraX;
+        this.priorityCameraY = cameraY;
+        this.priorityCameraZ = cameraZ;
+    }
+
     //NOTE: the biomes are always fully populated/kept up to date
 
     //Asks the Model system to bake all blocks that currently dont have a model
@@ -113,7 +136,7 @@ public class RenderGenerationService {
             if ((bitMsk&(1<<i))==0) continue;
             for (int j = 0; j < 32*32; j++) {
                 int block = Mapper.getBlockId(auxData[j+(i*32*32)]);
-                if (block != 0 && !factory.hasModelForBlockId(block)) {
+                if (block != 0 && factory.needsModelBakeForBlockId(block)) {
                     if (seenMissedIds.add(block)) {
                         this.modelBakery.requestBlockBake(block);
                     }
@@ -127,7 +150,7 @@ public class RenderGenerationService {
         final var factory = this.modelBakery.factory;
         for (long state : section._unsafeGetRawDataArray()) {
             int block = Mapper.getBlockId(state);
-            if (block != 0 && !factory.hasModelForBlockId(block)) {
+            if (block != 0 && factory.needsModelBakeForBlockId(block)) {
                 if (seenMissedIds.add(block)) {
                     this.modelBakery.requestBlockBake(block);
                 }
@@ -139,14 +162,11 @@ public class RenderGenerationService {
         return this.world.acquireIfExists(pos);
     }
 
-    private static boolean putTaskFirst(long pos) {
-        //Level 3 or 4
-        return WorldEngine.getLevel(pos) > 2;
-    }
-
-    //TODO: add a generated render data cache
     private void processJob(RenderDataFactory factory, IntOpenHashSet seenMissedIds) {
         BuildTask task = this.taskQueue.poll();
+        if (task == null) {
+            return;
+        }
         this.taskQueueCount.decrementAndGet();
 
         //long time = BuiltSection.getTime();
@@ -192,7 +212,7 @@ public class RenderGenerationService {
                     //Request the block
                     if (e.isIdBlockId) {
                         //TODO: maybe move this to _after_ task as been readded to queue??
-                        if (!this.modelBakery.factory.hasModelForBlockId(e.id)) {
+                        if (this.modelBakery.factory.needsModelBakeForBlockId(e.id)) {
                             if (seenMissedIds.add(e.id)) {
                                 this.modelBakery.requestBlockBake(e.id);
                             }
@@ -219,7 +239,7 @@ public class RenderGenerationService {
                 //Request the block
                 if (e.isIdBlockId) {
                     //TODO: maybe move this to _after_ task as been readded to queue??
-                    if (!this.modelBakery.factory.hasModelForBlockId(e.id)) {
+                    if (this.modelBakery.factory.needsModelBakeForBlockId(e.id)) {
                         if (seenMissedIds.add(e.id)) {
                             this.modelBakery.requestBlockBake(e.id);
                         }
@@ -273,7 +293,7 @@ public class RenderGenerationService {
                     shouldFreeSection = false;
                 }
 
-                task.updatePriority();
+                task.updatePriority(this.priorityCameraX, this.priorityCameraY, this.priorityCameraZ);
                 this.taskQueue.add(task);
                 this.taskQueueCount.incrementAndGet();
 
@@ -299,7 +319,7 @@ public class RenderGenerationService {
         }
     }
 
-    public void enqueueTask(long pos) {
+    public void enqueueTask(long pos, MeshUrgency urgency) {
         if (!this.service.isLive()) {
             return;
         }
@@ -312,12 +332,17 @@ public class RenderGenerationService {
         this.taskMapLock.unlockWrite(stamp);
 
         if (isOurs[0]) {//If its not ours we dont care about it
+            task.applyUrgency(urgency);
             //Set priority and insert into queue and execute
-            task.updatePriority();
+            task.updatePriority(this.priorityCameraX, this.priorityCameraY, this.priorityCameraZ);
             this.taskQueue.add(task);
             this.taskQueueCount.incrementAndGet();
             this.service.execute();
         }
+    }
+
+    public void enqueueTask(long pos) {
+        this.enqueueTask(pos, new MeshUrgency(WorldEngine.getLevel(pos), false));
     }
 
     /*

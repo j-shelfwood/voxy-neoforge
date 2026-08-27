@@ -13,17 +13,28 @@ final class VoxyLoadingIndicatorModel {
     final float pulse;
     final int meshQueue;
     final int modelQueue;
-    final boolean nodePending;
+    final int queuedNodeRequests;
+    final int inFlightNodeRequests;
+    final int currentPhaseLevel;
+    final int completedRoots;
+    final int totalRoots;
     final int loadedSections;
 
-    VoxyLoadingIndicatorModel(Mode mode, float alpha, float progress, float pulse, int meshQueue, int modelQueue, boolean nodePending, int loadedSections) {
+    VoxyLoadingIndicatorModel(Mode mode, float alpha, float progress, float pulse, int meshQueue, int modelQueue,
+                              int queuedNodeRequests, int inFlightNodeRequests, int currentPhaseLevel,
+                              int completedRoots, int totalRoots,
+                              int loadedSections) {
         this.mode = mode;
         this.alpha = alpha;
         this.progress = progress;
         this.pulse = pulse;
         this.meshQueue = meshQueue;
         this.modelQueue = modelQueue;
-        this.nodePending = nodePending;
+        this.queuedNodeRequests = queuedNodeRequests;
+        this.inFlightNodeRequests = inFlightNodeRequests;
+        this.currentPhaseLevel = currentPhaseLevel;
+        this.completedRoots = completedRoots;
+        this.totalRoots = totalRoots;
         this.loadedSections = loadedSections;
     }
 

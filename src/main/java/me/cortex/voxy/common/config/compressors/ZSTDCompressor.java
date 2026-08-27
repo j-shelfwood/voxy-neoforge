@@ -3,7 +3,7 @@ package me.cortex.voxy.common.config.compressors;
 import me.cortex.voxy.common.config.ConfigBuildCtx;
 import me.cortex.voxy.common.util.MemoryBuffer;
 import me.cortex.voxy.common.util.ThreadLocalMemoryBuffer;
-import me.cortex.voxy.common.world.SaveLoadSystem;
+import me.cortex.voxy.common.world.SaveLoadSystem3;
 
 import static me.cortex.voxy.common.util.GlobalCleaner.CLEANER;
 import static org.lwjgl.util.zstd.Zstd.*;
@@ -29,7 +29,7 @@ public class ZSTDCompressor implements StorageCompressor {
     private static final ThreadLocal<Ref> COMPRESSION_CTX = ThreadLocal.withInitial(ZSTDCompressor::createCleanableCompressionContext);
     private static final ThreadLocal<Ref> DECOMPRESSION_CTX = ThreadLocal.withInitial(ZSTDCompressor::createCleanableDecompressionContext);
 
-    private static final ThreadLocalMemoryBuffer SCRATCH = new ThreadLocalMemoryBuffer(SaveLoadSystem.BIGGEST_SERIALIZED_SECTION_SIZE + 1024);
+    private static final ThreadLocalMemoryBuffer SCRATCH = new ThreadLocalMemoryBuffer(SaveLoadSystem3.BIGGEST_SERIALIZED_SECTION_SIZE + 1024);
 
     private final int level;
 
