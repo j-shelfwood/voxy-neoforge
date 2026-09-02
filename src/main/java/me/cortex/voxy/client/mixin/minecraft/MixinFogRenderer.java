@@ -1,26 +1,36 @@
 package me.cortex.voxy.client.mixin.minecraft;
 
+import com.mojang.blaze3d.shaders.FogShape;
+import com.mojang.blaze3d.systems.RenderSystem;
+import me.cortex.voxy.client.config.VoxyConfig;
 import net.minecraft.client.renderer.FogRenderer;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/**
- * MC 1.21.1 compatible fog mixin.
- *
- * This is a placeholder mixin that documents fog handling for NeoForge port.
- * The actual fog manipulation (save-restore pattern) is done in VoxyRenderSystem.renderOpaque()
- * to ensure vanilla terrain renders with normal fog, while Voxy LODs render with fog pushed to infinity.
- *
- * Render order:
- * 1. setupFog(FOG_TERRAIN) called - fog set to vanilla render distance
- * 2. Vanilla terrain renders - with normal fog
- * 3. Voxy renderOpaque() called:
- *    a. Save current fog values
- *    b. Push fog to infinity (999999.0f)
- *    c. Render LODs without fog wall
- *    d. Restore original fog values
- * 4. Clouds/other elements render - with correct fog
- */
-@Mixin(FogRenderer.class)
+@Mixin({FogRenderer.class})
 public class MixinFogRenderer {
-    // No injections needed - VoxyRenderSystem handles fog save-restore directly
+   @Inject(
+      method = {"setupFog"},
+      at = {@At("TAIL")}
+   )
+   private static void voxy$disableFog(CallbackInfo ci) {
+      if (VoxyConfig.CONFIG.enabled && VoxyConfig.CONFIG.enableRendering) {
+         RenderSystem.setShaderFogStart(-1024.0F);
+         RenderSystem.setShaderFogEnd(1000000.0F);
+         RenderSystem.setShaderFogShape(FogShape.SPHERE);
+      }
+   }
+
+   @Inject(
+      method = {"levelFogColor"},
+      at = {@At("TAIL")}
+   )
+   private static void voxy$clearFogColorAlpha(CallbackInfo ci) {
+      if (VoxyConfig.CONFIG.enabled && VoxyConfig.CONFIG.enableRendering) {
+         float[] color = RenderSystem.getShaderFogColor();
+         RenderSystem.setShaderFogColor(color[0], color[1], color[2], 0.0F);
+      }
+   }
 }

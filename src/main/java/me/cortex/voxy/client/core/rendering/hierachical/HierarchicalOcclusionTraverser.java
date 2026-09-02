@@ -14,355 +14,280 @@ import me.cortex.voxy.client.core.rendering.util.PrintfDebugUtil;
 import me.cortex.voxy.client.core.rendering.util.UploadStream;
 import me.cortex.voxy.common.Logger;
 import me.cortex.voxy.common.util.MemoryBuffer;
-import me.cortex.voxy.common.world.WorldEngine;
+import org.joml.Vector4f;
+import org.lwjgl.opengl.GL42;
+import org.lwjgl.opengl.GL45;
 import org.lwjgl.system.MemoryUtil;
 
-import static me.cortex.voxy.client.core.rendering.util.PrintfDebugUtil.PRINTF_processor;
-import static org.lwjgl.opengl.GL11.*;
-import static org.lwjgl.opengl.GL12.GL_UNPACK_IMAGE_HEIGHT;
-import static org.lwjgl.opengl.GL12.GL_UNPACK_SKIP_IMAGES;
-import static org.lwjgl.opengl.GL30.*;
-import static org.lwjgl.opengl.GL30C.GL_RED_INTEGER;
-import static org.lwjgl.opengl.GL42.glMemoryBarrier;
-import static org.lwjgl.opengl.GL43.GL_SHADER_STORAGE_BARRIER_BIT;
-import static org.lwjgl.opengl.GL45.*;
-
-// TODO: swap to persistent gpu threads instead of dispatching MAX_ITERATIONS of compute layers
 public class HierarchicalOcclusionTraverser {
-    public static final boolean HIERARCHICAL_SHADER_DEBUG = System.getProperty("voxy.hierarchicalShaderDebug", "false").equals("true");
+   public static final boolean HIERARCHICAL_SHADER_DEBUG = System.getProperty("voxy.hierarchicalShaderDebug", "false").equals("true");
+   public static final int MAX_REQUEST_QUEUE_SIZE = 50;
+   public static final int MAX_QUEUE_SIZE = 200000;
+   private static final int MAX_ITERATIONS = 5;
+   private static final int LOCAL_WORK_SIZE_BITS = 5;
+   private final AsyncNodeManager nodeManager;
+   private final NodeCleaner nodeCleaner;
+   private final RenderGenerationService meshGen;
+   private final GlBuffer requestBuffer;
+   private final GlBuffer nodeBuffer;
+   private final GlBuffer uniformBuffer = new GlBuffer(1024L).zero();
+   private final GlBuffer statisticsBuffer = new GlBuffer(1024L).zero();
+   private int topNodeCount;
+   private final Int2IntOpenHashMap topNode2idxMapping = new Int2IntOpenHashMap();
+   private final int[] idx2topNodeMapping = new int[200000];
+   private final GlBuffer topNodeIds = new GlBuffer(800000L).zero();
+   private final GlBuffer queueMetaBuffer = new GlBuffer(80L).zero();
+   private final GlBuffer scratchQueueA = new GlBuffer(800000L).zero();
+   private final GlBuffer scratchQueueB = new GlBuffer(800000L).zero();
+   private static int BINDING_COUNTER = 1;
+   private static final int SCENE_UNIFORM_BINDING = BINDING_COUNTER++;
+   private static final int REQUEST_QUEUE_BINDING = BINDING_COUNTER++;
+   private static final int RENDER_QUEUE_BINDING = BINDING_COUNTER++;
+   private static final int NODE_DATA_BINDING = BINDING_COUNTER++;
+   private static final int NODE_QUEUE_INDEX_BINDING = BINDING_COUNTER++;
+   private static final int NODE_QUEUE_META_BINDING = BINDING_COUNTER++;
+   private static final int NODE_QUEUE_SOURCE_BINDING = BINDING_COUNTER++;
+   private static final int NODE_QUEUE_SINK_BINDING = BINDING_COUNTER++;
+   private static final int RENDER_TRACKER_BINDING = BINDING_COUNTER++;
+   private static final int STATISTICS_BUFFER_BINDING = BINDING_COUNTER++;
+   private final int hizSampler = GL45.glGenSamplers();
+   private final AutoBindingShader traversal = Shader.makeAuto(PrintfDebugUtil.PRINTF_processor)
+      .defineIf("DEBUG", HIERARCHICAL_SHADER_DEBUG)
+      .define("MAX_ITERATIONS", 5)
+      .define("LOCAL_SIZE_BITS", 5)
+      .define("MAX_REQUEST_QUEUE_SIZE", 50)
+      .define("HIZ_BINDING", 0)
+      .define("SCENE_UNIFORM_BINDING", SCENE_UNIFORM_BINDING)
+      .define("REQUEST_QUEUE_BINDING", REQUEST_QUEUE_BINDING)
+      .define("RENDER_QUEUE_BINDING", RENDER_QUEUE_BINDING)
+      .define("NODE_DATA_BINDING", NODE_DATA_BINDING)
+      .define("NODE_QUEUE_INDEX_BINDING", NODE_QUEUE_INDEX_BINDING)
+      .define("NODE_QUEUE_META_BINDING", NODE_QUEUE_META_BINDING)
+      .define("NODE_QUEUE_SOURCE_BINDING", NODE_QUEUE_SOURCE_BINDING)
+      .define("NODE_QUEUE_SINK_BINDING", NODE_QUEUE_SINK_BINDING)
+      .define("RENDER_TRACKER_BINDING", RENDER_TRACKER_BINDING)
+      .defineIf("HAS_STATISTICS", RenderStatistics.enabled)
+      .defineIf("STATISTICS_BUFFER_BINDING", RenderStatistics.enabled, STATISTICS_BUFFER_BINDING)
+      .add(ShaderType.COMPUTE, "voxy:lod/hierarchical/traversal_dev.comp")
+      .compile();
+   private static final long SCRATCH = MemoryUtil.nmemAlloc(32L);
 
-    public static final int MAX_REQUEST_QUEUE_SIZE = 50;
-    public static final int MAX_QUEUE_SIZE = 200_000;
+   public HierarchicalOcclusionTraverser(AsyncNodeManager nodeManager, NodeCleaner nodeCleaner, RenderGenerationService meshGen) {
+      this.nodeCleaner = nodeCleaner;
+      this.nodeManager = nodeManager;
+      this.meshGen = meshGen;
+      this.requestBuffer = new GlBuffer(408L).zero();
+      this.nodeBuffer = new GlBuffer(nodeManager.maxNodeCount * 16L).fill(-1);
+      GL45.glSamplerParameteri(this.hizSampler, 10241, 9984);
+      GL45.glSamplerParameteri(this.hizSampler, 10240, 9728);
+      GL45.glSamplerParameteri(this.hizSampler, 10243, 33071);
+      GL45.glSamplerParameteri(this.hizSampler, 10242, 33071);
+      this.traversal
+         .ubo("SCENE_UNIFORM_BINDING", this.uniformBuffer)
+         .ssbo("REQUEST_QUEUE_BINDING", this.requestBuffer)
+         .ssbo("NODE_DATA_BINDING", this.nodeBuffer)
+         .ssbo("NODE_QUEUE_META_BINDING", this.queueMetaBuffer)
+         .ssbo("RENDER_TRACKER_BINDING", this.nodeCleaner.visibilityBuffer)
+         .ssboIf("STATISTICS_BUFFER_BINDING", this.statisticsBuffer);
+      this.topNode2idxMapping.defaultReturnValue(-1);
+      this.nodeManager.setTLNAddRemoveCallbacks(this::addTLN, this::remTLN);
+   }
 
-
-    private static final int MAX_ITERATIONS = WorldEngine.MAX_LOD_LAYER+1;
-    private static final int LOCAL_WORK_SIZE_BITS = 5;
-
-    private final AsyncNodeManager nodeManager;
-    private final NodeCleaner nodeCleaner;
-    private final RenderGenerationService meshGen;
-
-    private final GlBuffer requestBuffer;
-
-    private final GlBuffer nodeBuffer;
-    private final GlBuffer uniformBuffer = new GlBuffer(1024).zero();
-    private final GlBuffer statisticsBuffer = new GlBuffer(1024).zero();
-
-
-    private int topNodeCount;
-    private final Int2IntOpenHashMap topNode2idxMapping = new Int2IntOpenHashMap();//Used to store mapping from TLN to array index
-    private final int[] idx2topNodeMapping = new int[MAX_QUEUE_SIZE];//Used to map idx to TLN id
-    private final GlBuffer topNodeIds = new GlBuffer(MAX_QUEUE_SIZE*4).zero();
-    private final GlBuffer queueMetaBuffer = new GlBuffer(4*4*MAX_ITERATIONS).zero();
-    private final GlBuffer scratchQueueA = new GlBuffer(MAX_QUEUE_SIZE*4).zero();
-    private final GlBuffer scratchQueueB = new GlBuffer(MAX_QUEUE_SIZE*4).zero();
-
-    private static int BINDING_COUNTER = 1;
-    private static final int SCENE_UNIFORM_BINDING = BINDING_COUNTER++;
-    private static final int REQUEST_QUEUE_BINDING = BINDING_COUNTER++;
-    private static final int RENDER_QUEUE_BINDING = BINDING_COUNTER++;
-    private static final int NODE_DATA_BINDING = BINDING_COUNTER++;
-    private static final int NODE_QUEUE_INDEX_BINDING = BINDING_COUNTER++;
-    private static final int NODE_QUEUE_META_BINDING = BINDING_COUNTER++;
-    private static final int NODE_QUEUE_SOURCE_BINDING = BINDING_COUNTER++;
-    private static final int NODE_QUEUE_SINK_BINDING = BINDING_COUNTER++;
-    private static final int RENDER_TRACKER_BINDING = BINDING_COUNTER++;
-    private static final int STATISTICS_BUFFER_BINDING = BINDING_COUNTER++;
-
-    private final int hizSampler = glGenSamplers();
-
-    private final AutoBindingShader traversal = Shader.makeAuto(PRINTF_processor)
-            .defineIf("DEBUG", HIERARCHICAL_SHADER_DEBUG)
-            .define("MAX_ITERATIONS", MAX_ITERATIONS)
-            .define("LOCAL_SIZE_BITS", LOCAL_WORK_SIZE_BITS)
-            .define("MAX_REQUEST_QUEUE_SIZE", MAX_REQUEST_QUEUE_SIZE)
-
-            .define("HIZ_BINDING", 0)
-
-            .define("SCENE_UNIFORM_BINDING", SCENE_UNIFORM_BINDING)
-            .define("REQUEST_QUEUE_BINDING", REQUEST_QUEUE_BINDING)
-            .define("RENDER_QUEUE_BINDING", RENDER_QUEUE_BINDING)
-            .define("NODE_DATA_BINDING", NODE_DATA_BINDING)
-
-            .define("NODE_QUEUE_INDEX_BINDING", NODE_QUEUE_INDEX_BINDING)
-            .define("NODE_QUEUE_META_BINDING", NODE_QUEUE_META_BINDING)
-            .define("NODE_QUEUE_SOURCE_BINDING", NODE_QUEUE_SOURCE_BINDING)
-            .define("NODE_QUEUE_SINK_BINDING", NODE_QUEUE_SINK_BINDING)
-
-            .define("RENDER_TRACKER_BINDING", RENDER_TRACKER_BINDING)
-
-            .defineIf("HAS_STATISTICS", RenderStatistics.enabled)
-            .defineIf("STATISTICS_BUFFER_BINDING", RenderStatistics.enabled, STATISTICS_BUFFER_BINDING)
-
-            .add(ShaderType.COMPUTE, "voxy:lod/hierarchical/traversal_dev.comp")
-            .compile();
-
-
-    public HierarchicalOcclusionTraverser(AsyncNodeManager nodeManager, NodeCleaner nodeCleaner, RenderGenerationService meshGen) {
-        this.nodeCleaner = nodeCleaner;
-        this.nodeManager = nodeManager;
-        this.meshGen = meshGen;
-        this.requestBuffer = new GlBuffer(MAX_REQUEST_QUEUE_SIZE*8L+8).zero();
-        this.nodeBuffer = new GlBuffer(nodeManager.maxNodeCount*16L).fill(-1);
-
-
-        glSamplerParameteri(this.hizSampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
-        glSamplerParameteri(this.hizSampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glSamplerParameteri(this.hizSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glSamplerParameteri(this.hizSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-
-        this.traversal
-                .ubo("SCENE_UNIFORM_BINDING", this.uniformBuffer)
-                .ssbo("REQUEST_QUEUE_BINDING", this.requestBuffer)
-                .ssbo("NODE_DATA_BINDING", this.nodeBuffer)
-                .ssbo("NODE_QUEUE_META_BINDING", this.queueMetaBuffer)
-                .ssbo("RENDER_TRACKER_BINDING", this.nodeCleaner.visibilityBuffer)
-                .ssboIf("STATISTICS_BUFFER_BINDING", this.statisticsBuffer);
-
-        this.topNode2idxMapping.defaultReturnValue(-1);
-        this.nodeManager.setTLNAddRemoveCallbacks(this::addTLN, this::remTLN);
-    }
-
-    private void addTLN(int id) {
-        int aid = this.topNodeCount++;//Increment buffer
-        if (this.topNodeCount > this.topNodeIds.size()/4) {
-            throw new IllegalStateException("Top level node count greater than capacity");
-        }
-
-        //Use clear buffer, yes know is a bad idea, TODO: replace
-        //Add the new top level node to the queue
-        MemoryUtil.memPutInt(SCRATCH, id);
-        nglClearNamedBufferSubData(this.topNodeIds.id, GL_R32UI, aid * 4L, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, SCRATCH);
-
-        if (this.topNode2idxMapping.put(id, aid) != -1) {
+   private void addTLN(int id) {
+      int aid = this.topNodeCount++;
+      if (this.topNodeCount > this.topNodeIds.size() / 4L) {
+         throw new IllegalStateException("Top level node count greater than capacity");
+      } else {
+         MemoryUtil.memPutInt(SCRATCH, id);
+         GL45.nglClearNamedBufferSubData(this.topNodeIds.id, 33334, aid * 4L, 4L, 36244, 5125, SCRATCH);
+         if (this.topNode2idxMapping.put(id, aid) != -1) {
             throw new IllegalStateException();
-        }
-        this.idx2topNodeMapping[aid] = id;
-    }
+         } else {
+            this.idx2topNodeMapping[aid] = id;
+         }
+      }
+   }
 
-    private void remTLN(int id) {
-        //Remove id
-        int idx = this.topNode2idxMapping.remove(id);
-        //Decrement count
-        this.topNodeCount--;
-        if (idx == -1) {
+   private void remTLN(int id) {
+      int idx = this.topNode2idxMapping.remove(id);
+      this.topNodeCount--;
+      if (idx == -1) {
+         throw new IllegalStateException();
+      } else if (idx != this.topNodeCount) {
+         int endTLNId = this.idx2topNodeMapping[this.topNodeCount];
+         this.idx2topNodeMapping[idx] = endTLNId;
+         if (this.topNode2idxMapping.put(endTLNId, idx) == -1) {
             throw new IllegalStateException();
-        }
+         } else {
+            MemoryUtil.memPutInt(SCRATCH, endTLNId);
+            GL45.nglClearNamedBufferSubData(this.topNodeIds.id, 33334, idx * 4L, 4L, 36244, 5125, SCRATCH);
+         }
+      }
+   }
 
-        //Count has already been decremented so is an exact match
-        //If we are at the end of the array we dont need to do anything
-        if (idx == this.topNodeCount) {
-            return;
-        }
+   private static void setFrustum(Viewport<?> viewport, long ptr) {
+      for (int i = 0; i < 6; i++) {
+         Vector4f plane = viewport.frustumPlanes[i];
+         plane.getToAddress(ptr);
+         ptr += 16L;
+      }
+   }
 
-        //Move the entry at the end to the current index
-        int endTLNId = this.idx2topNodeMapping[this.topNodeCount];
-        this.idx2topNodeMapping[idx] = endTLNId;//Set the old to the new
-        if (this.topNode2idxMapping.put(endTLNId, idx) == -1)
-            throw new IllegalStateException();
+   private void uploadUniform(Viewport<?> viewport, HierarchicalOcclusionTraverser.TraversalMode mode) {
+      long ptr = UploadStream.INSTANCE.upload(this.uniformBuffer, 0L, 1024L);
+      viewport.MVP.getToAddress(ptr);
+      ptr += 64L;
+      viewport.section.getToAddress(ptr);
+      ptr += 12L;
+      MemoryUtil.memPutInt(ptr, viewport.hiZBuffer.getPackedLevels());
+      ptr += 4L;
+      viewport.innerTranslation.getToAddress(ptr);
+      ptr += 12L;
+      float screenspaceAreaDecreasingSize = VoxyConfig.CONFIG.subDivisionSize * VoxyConfig.CONFIG.subDivisionSize;
+      MemoryUtil.memPutFloat(ptr, screenspaceAreaDecreasingSize / (viewport.width * viewport.height));
+      ptr += 4L;
+      setFrustum(viewport, ptr);
+      ptr += 96L;
+      MemoryUtil.memPutInt(ptr, (int)(viewport.getRenderList().size() / 4L - 1L));
+      ptr += 4L;
+      MemoryUtil.memPutInt(ptr, this.nodeCleaner.visibilityId);
+      ptr += 4L;
+      double TARGET_COUNT = 4000.0;
+      double iFillness = Math.max(0.0, (4000.0 - this.meshGen.getTaskCount()) / 4000.0);
+      iFillness = Math.pow(iFillness, 2.0);
+      int requestSize = (int)Math.ceil(iFillness * 50.0);
+      int requestCount = mode == HierarchicalOcclusionTraverser.TraversalMode.MAIN ? Math.max(0, Math.min(50, requestSize)) : 0;
+      MemoryUtil.memPutInt(ptr, requestCount);
+      ptr += 4L;
+      MemoryUtil.memPutInt(ptr, mode.flags);
+   }
 
-        //Move it server side, from end to new idx
-        MemoryUtil.memPutInt(SCRATCH, endTLNId);
-        nglClearNamedBufferSubData(this.topNodeIds.id, GL_R32UI, idx*4L, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, SCRATCH);
-    }
+   private void bindings(Viewport<?> viewport) {
+      GL45.glBindBuffer(37102, this.queueMetaBuffer.id);
+      GL45.glBindTextureUnit(0, viewport.hiZBuffer.getHizTextureId());
+      GL45.glBindSampler(0, this.hizSampler);
+      GL45.glBindBufferBase(37074, RENDER_QUEUE_BINDING, viewport.getRenderList().id);
+   }
 
-    private static void setFrustum(Viewport<?> viewport, long ptr) {
-        for (int i = 0; i < 6; i++) {
-            var plane = viewport.frustumPlanes[i];
-            plane.getToAddress(ptr); ptr += 4*4;
-        }
-    }
+   public void doTraversal(Viewport<?> viewport) {
+      this.doTraversal(viewport, HierarchicalOcclusionTraverser.TraversalMode.MAIN);
+   }
 
-    private void uploadUniform(Viewport<?> viewport) {
-        long ptr = UploadStream.INSTANCE.upload(this.uniformBuffer, 0, 1024);
+   public void doTraversal(Viewport<?> viewport, HierarchicalOcclusionTraverser.TraversalMode mode) {
+      this.uploadUniform(viewport, mode);
+      this.traversal.bind();
+      this.bindings(viewport);
+      PrintfDebugUtil.bind();
+      if (RenderStatistics.enabled) {
+         this.statisticsBuffer.zero();
+      }
 
-        viewport.MVP.getToAddress(ptr); ptr += 4*4*4;
-
-        viewport.section.getToAddress(ptr); ptr += 4*3;
-
-        //MemoryUtil.memPutFloat(ptr, viewport.width); ptr += 4;
-        MemoryUtil.memPutInt(ptr, viewport.hiZBuffer.getPackedLevels()); ptr += 4;
-
-        viewport.innerTranslation.getToAddress(ptr); ptr += 4*3;
-
-        //MemoryUtil.memPutFloat(ptr, viewport.height); ptr += 4;
-
-        final float screenspaceAreaDecreasingSize = VoxyConfig.CONFIG.subDivisionSize*VoxyConfig.CONFIG.subDivisionSize;
-        //Screen space size for descending
-        MemoryUtil.memPutFloat(ptr, (float) (screenspaceAreaDecreasingSize) /(viewport.width*viewport.height)); ptr += 4;
-
-        setFrustum(viewport, ptr); ptr += 4*4*6;
-
-        MemoryUtil.memPutInt(ptr, (int) (viewport.getRenderList().size()/4-1)); ptr += 4;
-
-        //VisibilityId
-        MemoryUtil.memPutInt(ptr, this.nodeCleaner.visibilityId); ptr += 4;
-
-        {
-            final double TARGET_COUNT = 4000;//TODO: make this configurable, or at least dynamically computed based on throughput rate of mesh gen
-            double iFillness = Math.max(0, (TARGET_COUNT - this.meshGen.getTaskCount()) / TARGET_COUNT);
-            iFillness = Math.pow(iFillness, 2);
-            final int requestSize = (int) Math.ceil(iFillness * MAX_REQUEST_QUEUE_SIZE);
-            MemoryUtil.memPutInt(ptr, Math.max(0, Math.min(MAX_REQUEST_QUEUE_SIZE, requestSize)));ptr += 4;
-        }
-    }
-
-    private void bindings(Viewport<?> viewport) {
-        glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, this.queueMetaBuffer.id);
-
-        //Bind the hiz buffer
-        glBindTextureUnit(0, viewport.hiZBuffer.getHizTextureId());
-        glBindSampler(0, this.hizSampler);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, RENDER_QUEUE_BINDING, viewport.getRenderList().id);
-    }
-
-    public void doTraversal(Viewport<?> viewport) {
-        this.uploadUniform(viewport);
-        //UploadStream.INSTANCE.commit(); //Done inside traversal
-
-        this.traversal.bind();
-        this.bindings(viewport);
-        PrintfDebugUtil.bind();
-
-        if (RenderStatistics.enabled) {
-            this.statisticsBuffer.zero();
-        }
-
-        //Clear the render output counter
-        nglClearNamedBufferSubData(viewport.getRenderList().id, GL_R32UI, 0, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, 0);
-
-        //Traverse
-        this.traverseInternal();
-
-        this.downloadResetRequestQueue();
-
-        if (RenderStatistics.enabled) {
-            DownloadStream.INSTANCE.download(this.statisticsBuffer, down->{
-                for (int i = 0; i < MAX_ITERATIONS; i++) {
-                    RenderStatistics.hierarchicalTraversalCounts[i] = MemoryUtil.memGetInt(down.address+i*4L);
-                }
-
-                for (int i = 0; i < MAX_ITERATIONS; i++) {
-                    RenderStatistics.hierarchicalRenderSections[i] = MemoryUtil.memGetInt(down.address+MAX_ITERATIONS*4L+i*4L);
-                }
-            });
-        }
-
-        //Bind the hiz buffer
-        glBindSampler(0, 0);
-        glBindTextureUnit(0, 0);
-    }
-
-    private void traverseInternal() {
-        {
-            //Fix mesa bug
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-            glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
-            glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
-            glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-            glPixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
-        }
-
-        int firstDispatchSize = (this.topNodeCount+(1<<LOCAL_WORK_SIZE_BITS)-1)>>LOCAL_WORK_SIZE_BITS;
-        /*
-        //prime the queue Todo: maybe move after the traversal? cause then it is more efficient work since it doesnt need to wait for this before starting?
-        glClearNamedBufferData(this.queueMetaBuffer.id, GL_RGBA32UI, GL_RGBA, GL_UNSIGNED_INT, new int[]{0,1,1,0});//Prime the metadata buffer, which also contains
-
-        //Set the first entry
-        glClearNamedBufferSubData(this.queueMetaBuffer.id, GL_RGBA32UI, 0, 16, GL_RGBA, GL_UNSIGNED_INT, new int[]{firstDispatchSize,1,1,initialQueueSize});
-         */
-        {//TODO:FIXME: THIS IS BULLSHIT BY INTEL need to fix the clearing
-            long ptr = UploadStream.INSTANCE.upload(this.queueMetaBuffer, 0, 16*MAX_ITERATIONS);
-            MemoryUtil.memPutInt(ptr +  0, firstDispatchSize);
-            MemoryUtil.memPutInt(ptr +  4, 1);
-            MemoryUtil.memPutInt(ptr +  8, 1);
-            MemoryUtil.memPutInt(ptr + 12, this.topNodeCount);
-            for (int i = 1; i < MAX_ITERATIONS; i++) {
-                MemoryUtil.memPutInt(ptr + (i*16)+ 0, 0);
-                MemoryUtil.memPutInt(ptr + (i*16)+ 4, 1);
-                MemoryUtil.memPutInt(ptr + (i*16)+ 8, 1);
-                MemoryUtil.memPutInt(ptr + (i*16)+12, 0);
+      GL45.nglClearNamedBufferSubData(viewport.getRenderList().id, 33334, 0L, 4L, 36244, 5125, 0L);
+      this.traverseInternal();
+      this.downloadResetRequestQueue();
+      if (RenderStatistics.enabled) {
+         DownloadStream.INSTANCE.download(this.statisticsBuffer, down -> {
+            for (int i = 0; i < 5; i++) {
+               RenderStatistics.hierarchicalTraversalCounts[i] = MemoryUtil.memGetInt(down.address + i * 4L);
             }
-            UploadStream.INSTANCE.commit();
-        }
 
-        //Execute first iteration
-        glUniform1ui(NODE_QUEUE_INDEX_BINDING, 0);
+            for (int i = 0; i < 5; i++) {
+               RenderStatistics.hierarchicalRenderSections[i] = MemoryUtil.memGetInt(down.address + 20L + i * 4L);
+            }
+         });
+      }
 
-        //Use the top node id buffer
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, NODE_QUEUE_SOURCE_BINDING, this.topNodeIds.id);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, NODE_QUEUE_SINK_BINDING, this.scratchQueueB.id);
+      GL45.glBindSampler(0, 0);
+      GL45.glBindTextureUnit(0, 0);
+   }
 
-        //Dont need to use indirect to dispatch the first iteration
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT|GL_COMMAND_BARRIER_BIT|GL_BUFFER_UPDATE_BARRIER_BIT);
-        glDispatchCompute(firstDispatchSize, 1,1);
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT|GL_COMMAND_BARRIER_BIT);
+   private void traverseInternal() {
+      GL45.glPixelStorei(3314, 0);
+      GL45.glPixelStorei(32878, 0);
+      GL45.glPixelStorei(3316, 0);
+      GL45.glPixelStorei(3315, 0);
+      GL45.glPixelStorei(32877, 0);
+      int firstDispatchSize = this.topNodeCount + 32 - 1 >> 5;
+      long ptr = UploadStream.INSTANCE.upload(this.queueMetaBuffer, 0L, 80L);
+      MemoryUtil.memPutInt(ptr + 0L, firstDispatchSize);
+      MemoryUtil.memPutInt(ptr + 4L, 1);
+      MemoryUtil.memPutInt(ptr + 8L, 1);
+      MemoryUtil.memPutInt(ptr + 12L, this.topNodeCount);
 
-        //Dispatch max iterations
-        for (int iter = 1; iter < MAX_ITERATIONS; iter++) {
-            glUniform1ui(NODE_QUEUE_INDEX_BINDING, iter);
+      for (int i = 1; i < 5; i++) {
+         MemoryUtil.memPutInt(ptr + i * 16 + 0L, 0);
+         MemoryUtil.memPutInt(ptr + i * 16 + 4L, 1);
+         MemoryUtil.memPutInt(ptr + i * 16 + 8L, 1);
+         MemoryUtil.memPutInt(ptr + i * 16 + 12L, 0);
+      }
 
-            //Flipflop buffers
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, NODE_QUEUE_SOURCE_BINDING, ((iter & 1) == 0 ? this.scratchQueueA : this.scratchQueueB).id);
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, NODE_QUEUE_SINK_BINDING, ((iter & 1) == 0 ? this.scratchQueueB : this.scratchQueueA).id);
+      UploadStream.INSTANCE.commit();
+      GL45.glUniform1ui(NODE_QUEUE_INDEX_BINDING, 0);
+      GL45.glBindBufferBase(37074, NODE_QUEUE_SOURCE_BINDING, this.topNodeIds.id);
+      GL45.glBindBufferBase(37074, NODE_QUEUE_SINK_BINDING, this.scratchQueueB.id);
+      GL42.glMemoryBarrier(8768);
+      GL45.glDispatchCompute(firstDispatchSize, 1, 1);
+      GL42.glMemoryBarrier(8256);
 
-            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
+      for (int iter = 1; iter < 5; iter++) {
+         GL45.glUniform1ui(NODE_QUEUE_INDEX_BINDING, iter);
+         GL45.glBindBufferBase(37074, NODE_QUEUE_SOURCE_BINDING, ((iter & 1) == 0 ? this.scratchQueueA : this.scratchQueueB).id);
+         GL45.glBindBufferBase(37074, NODE_QUEUE_SINK_BINDING, ((iter & 1) == 0 ? this.scratchQueueB : this.scratchQueueA).id);
+         GL42.glMemoryBarrier(8256);
+         GL45.glDispatchComputeIndirect(iter * 4 * 4);
+      }
 
-            //Dispatch and barrier
-            glDispatchComputeIndirect(iter * 4 * 4);
-        }
+      GL42.glMemoryBarrier(8256);
+   }
 
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
-    }
+   private void downloadResetRequestQueue() {
+      GL42.glMemoryBarrier(8192);
+      DownloadStream.INSTANCE.download(this.requestBuffer, this::forwardDownloadResult);
+      GL45.nglClearNamedBufferSubData(this.requestBuffer.id, 33334, 0L, 4L, 36244, 5125, 0L);
+   }
 
+   private void forwardDownloadResult(long ptr, long size) {
+      int count = MemoryUtil.memGetInt(ptr);
+      ptr += 8L;
+      if (count >= 0 && count <= 50000) {
+         if (count > (this.requestBuffer.size() >> 3) - 1L) {
+            count = (int)((this.requestBuffer.size() >> 3) - 1L);
+            MemoryUtil.memPutInt(ptr - 8L, count);
+         }
 
-    private void downloadResetRequestQueue() {
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-        DownloadStream.INSTANCE.download(this.requestBuffer, this::forwardDownloadResult);
-        nglClearNamedBufferSubData(this.requestBuffer.id, GL_R32UI, 0, 4, GL_RED_INTEGER, GL_UNSIGNED_INT, 0);
-    }
+         if (count != 0) {
+            this.nodeManager.submitRequestBatch(new MemoryBuffer(count * 8L + 8L).cpyFrom(ptr - 8L));
+         }
+      } else {
+         Logger.error(new IllegalStateException("Count unexpected extreme value: " + count + " things may get weird"));
+      }
+   }
 
-    private void forwardDownloadResult(long ptr, long size) {
-        int count = MemoryUtil.memGetInt(ptr);ptr += 8;//its 8 since we need to skip the second value (which is empty)
-        if (count < 0 || count > 50000) {
-            Logger.error(new IllegalStateException("Count unexpected extreme value: " + count + " things may get weird"));
-            return;
-        }
-        if (count > (this.requestBuffer.size()>>3)-1) {
-            //This should not break the synchonization between gpu and cpu as in the traversal shader is
-            // `if (atomRes < REQUEST_QUEUE_SIZE) {` which forcefully clamps to the request size
+   public GlBuffer getNodeBuffer() {
+      return this.nodeBuffer;
+   }
 
-            //Logger.warn("Count over max buffer size, clamping, got count: " + count + ".");
+   public void free() {
+      this.traversal.free();
+      this.requestBuffer.free();
+      this.nodeBuffer.free();
+      this.uniformBuffer.free();
+      this.statisticsBuffer.free();
+      this.queueMetaBuffer.free();
+      this.topNodeIds.free();
+      this.scratchQueueA.free();
+      this.scratchQueueB.free();
+      GL45.glDeleteSamplers(this.hizSampler);
+   }
 
-            count = (int) ((this.requestBuffer.size()>>3)-1);
+   public static enum TraversalMode {
+      MAIN(7),
+      SHADOW(0);
 
-            //Write back the clamped count
-            MemoryUtil.memPutInt(ptr-8, count);
-        }
-        //if (count > REQUEST_QUEUE_SIZE) {
-        //    Logger.warn("Count larger than 'maxRequestCount', overflow captured. Overflowed by " + (count-REQUEST_QUEUE_SIZE));
-        //}
-        if (count != 0) {
-            this.nodeManager.submitRequestBatch(new MemoryBuffer(count*8L+8).cpyFrom(ptr-8));// the -8 is because we incremented it by 8
-        }
-    }
+      private final int flags;
 
-    public GlBuffer getNodeBuffer() {
-        return this.nodeBuffer;
-    }
-
-    public void free() {
-        this.traversal.free();
-        this.requestBuffer.free();
-        this.nodeBuffer.free();
-        this.uniformBuffer.free();
-        this.statisticsBuffer.free();
-        this.queueMetaBuffer.free();
-        this.topNodeIds.free();
-        this.scratchQueueA.free();
-        this.scratchQueueB.free();
-        glDeleteSamplers(this.hizSampler);
-    }
-
-    private static final long SCRATCH = MemoryUtil.nmemAlloc(32);//32 bytes of scratch memory
+      private TraversalMode(int flags) {
+         this.flags = flags;
+      }
+   }
 }

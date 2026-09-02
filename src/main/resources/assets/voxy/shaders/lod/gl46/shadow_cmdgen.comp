@@ -1,0 +1,48 @@
+#version 450
+
+layout(local_size_x = 128) in;
+
+#define DRAW_BUFFER_BINDING 1
+#define DRAW_COUNT_BUFFER_BINDING 2
+#define SECTION_METADATA_BUFFER_BINDING 3
+#define INDIRECT_SECTION_LOOKUP_BINDING 5
+#define POSITION_SCRATCH_BINDING 6
+#define POSITION_SCRATCH_ACCESS writeonly
+
+#import <voxy:lod/section.glsl>
+#import <voxy:lod/gl46/bindings.glsl>
+
+void main() {
+    if (gl_GlobalInvocationID.x >= sectionCount) {
+        return;
+    }
+
+    uint sectionId = indirectLookup[gl_GlobalInvocationID.x];
+    SectionMeta meta = sectionData[sectionId];
+    uvec4 counts = meta.b;
+
+    uint translucentCount = counts.x & 0xFFFFu;
+    uint opaqueQuadCount = (counts.x >> 16)
+            + (counts.y & 0xFFFFu) + (counts.y >> 16)
+            + (counts.z & 0xFFFFu) + (counts.z >> 16)
+            + (counts.w & 0xFFFFu) + (counts.w >> 16);
+
+    if (opaqueQuadCount == 0u) {
+        return;
+    }
+
+    uint drawId = atomicAdd(opaqueDrawCount, 1u);
+    if (drawId >= 400000u) {
+        return;
+    }
+
+    positionBuffer[drawId] = extractRawPos(meta);
+
+    DrawCommand cmd;
+    cmd.count = opaqueQuadCount * 6u;
+    cmd.instanceCount = 1u;
+    cmd.firstIndex = 0u;
+    cmd.baseVertex = int(extractQuadStart(meta) + translucentCount) << 2;
+    cmd.baseInstance = drawId;
+    cmdBuffer[drawId] = cmd;
+}

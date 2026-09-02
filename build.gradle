@@ -18,10 +18,10 @@ sourceSets {
     main {
         java {
             // Iris shader integration
-            exclude 'me/cortex/voxy/client/iris/**'
-            exclude 'me/cortex/voxy/client/core/IrisVoxyRenderPipeline.java'
-            exclude 'me/cortex/voxy/client/core/util/IrisUtil.java'
-            exclude 'me/cortex/voxy/client/mixin/iris/**'
+            // exclude 'me/cortex/voxy/client/iris/**' // re-enabled in July shadow-caster work
+            // exclude 'me/cortex/voxy/client/core/IrisVoxyRenderPipeline.java' // re-enabled in July shadow-caster work
+            // exclude 'me/cortex/voxy/client/core/util/IrisUtil.java' // re-enabled in July shadow-caster work
+            // exclude 'me/cortex/voxy/client/mixin/iris/**' // re-enabled in July shadow-caster work
 
             // Sodium config API (changed in Sodium 0.6.x)
             exclude 'me/cortex/voxy/client/config/SodiumConfigBuilder.java'
@@ -197,7 +197,7 @@ dependencies {
     // TODO: Add NeoForge versions when available
     //compileOnly "drouarb:nvidium:0.4.1-beta4:1.21.6@jar"
     //compileOnly("maven.modrinth:modmenu:17.0.0-alpha.1")
-    //compileOnly("maven.modrinth:iris:1.10.4+1.21.11-neoforge")
+    compileOnly("maven.modrinth:iris:1.8.14-beta.1+1.21.1-neoforge")
     //compileOnly("maven.modrinth:chunky:1.4.54-neoforge")
     //compileOnly("maven.modrinth:vivecraft:1.21.9-1.3.2-neoforge")
     //compileOnly("maven.modrinth:flashback:rNCr1Rbs")

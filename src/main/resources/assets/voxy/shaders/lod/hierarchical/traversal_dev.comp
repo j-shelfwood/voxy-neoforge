@@ -17,6 +17,7 @@ layout(binding = SCENE_UNIFORM_BINDING, std140) uniform SceneUniform {
     uint renderQueueMaxSize;
     uint frameId;
     uint requestQueueSize;
+    uint traversalFlags;
 };
 
 #import <voxy:lod/hierarchical/queue.glsl>
@@ -47,6 +48,9 @@ layout(binding = STATISTICS_BUFFER_BINDING, std430) restrict buffer statisticsBu
 #endif
 
 void addRequest(inout UnpackedNode node) {
+    if ((traversalFlags & 4u) == 0u) {
+        return;
+    }
     //printf("Put node decend request");
     if (!hasRequested(node)) {
         if (requestQueueIndex.x < requestQueueSize) {//Soft limit
@@ -76,7 +80,9 @@ void enqueueChildren(in UnpackedNode node) {
 void enqueueSelfForRender(in UnpackedNode node) {
     //printf("render %d@[%d,%d,%d]", node.lodLevel, node.pos.x, node.pos.y, node.pos.z);
     if (renderQueueIndex < renderQueueMaxSize) {
-        lastRenderFrame[getId(node)] = frameId;
+        if ((traversalFlags & 2u) != 0u) {
+            lastRenderFrame[getId(node)] = frameId;
+        }
         if (!isEmptyMesh(node)) {
             uint renderIndex = atomicAdd(renderQueueIndex, 1);
             if (renderIndex < renderQueueMaxSize) {
@@ -104,7 +110,7 @@ void traverse(in UnpackedNode node) {
     setupScreenspace(node);
     //debugDumpNode(node);
 
-    if (outsideFrustum() || isCulledByHiz()) {
+    if (outsideFrustum() || ((traversalFlags & 1u) != 0u && isCulledByHiz())) {
         //printf("culled");
     } else {
         //It is visible, TODO: maybe do a more detailed hiz test? (or make it so that )
